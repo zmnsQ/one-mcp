@@ -1,0 +1,52 @@
+2026-10-15T09:59:47Z
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> mcp-harbor-gateway@0.1.0 test
+> npm run build && node validation/smoke.mjs && node validation/advanced-smoke.mjs && node validation/workflow-smoke.mjs
+
+npm warn Unknown env config "http-proxy". This will stop working in the next major version of npm.
+
+> mcp-harbor-gateway@0.1.0 build
+> tsc
+
+PASS management start + upstream initialization
+PASS HTTP MCP initialize
+PASS aggregate catalogue + allowlist + public alias
+PASS aggregate read-only tool call
+PASS per-server endpoint
+PASS disabled tool denied
+PASS browser Origin denied
+PASS managed server stop
+PASS clean gateway shutdown
+PASS startup has no automatically started servers or exposed tools
+PASS empty allowlist denies list and direct call
+PASS same-name tools receive distinct bounded aliases and invoke successfully
+PASS native IPC exports tool schema and public alias
+PASS invalid executable returns error status for native recovery
+PASS nonlocal Host rejected
+PASS stopped endpoint removed immediately
+PASS shutdown cleans up multiple managed MCP processes
+PASS starting server remains hidden until initialized and discovered
+PASS upstream receives explicit environment but no unrelated parent credential
+PASS duplicate start preserves running status and live route
+PASS duplicate tool names and cyclic pagination fail closed without orphan routes
+PASS multi-page discovery includes all allowed tools
+PASS concurrent discoveries coalesce into one upstream catalogue request
+PASS list_changed updates native catalogue and removes obsolete routes immediately
+PASS failed refresh clears stale routes while healthy aggregate tools remain available
+PASS failed catalogue can recover through stop and restart with same id
+PASS malformed targets, empty Origin, invalid content types and JSON fail without crashing
+PASS oversized streaming body receives 413 and gateway remains healthy
+PASS stateless initialized notification accepted
+PASS per-upstream concurrency is bounded and HTTP disconnect cancels upstream work
+PASS unexpected upstream exit removes routes and permits clean restart
+PASS discovery errors redact overlapping configured secrets before IPC delivery
+PASS real 60-second call timeout cancels upstream and releases capacity for later calls
+PASS shutdown exits cleanly after multi-server and in-flight lifecycle tests
+PASS SIGTERM during initialization cannot resurrect a stopped server
+Completed 18 workflow checks against freshly built gateway.
+npm notice
+npm notice New major version of npm available! 11.9.0 -> 12.2.0
+npm notice Changelog: https://github.com/npm/cli/releases/tag/v12.2.0
+npm notice To update run: npm install -g npm@12.2.0
+npm notice

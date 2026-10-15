@@ -1,0 +1,25 @@
+# Local builds and package caches
+.build/
+.swiftpm/
+dist/
+node_modules/
+.npm-cache/
+.cache/
+.DS_Store
+*.xcuserstate
+xcuserdata/
+# Runtime/private configuration and credentials
+.env
+.env.*
+!.env.example
+*.p12
+*.pem
+*.key
+settings.json
+workspaces.json
+Workspaces/
+Recovery-*/
+# Generated verification output; commit source tests and current report instead
+*.log
+MANIFEST.sha256
+docs/swift-syntax-check.json
