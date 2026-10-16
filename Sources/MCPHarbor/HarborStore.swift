@@ -14,6 +14,7 @@ import AppKit
     @Published var initializedTargets: [String: String] = [:]
     @Published var checkedTargets: [String: String] = [:]
     @Published var doctorPassed: [String: Bool] = [:]
+    @Published var tunnelHealthSnapshots: [String: TunnelHealthSnapshot] = [:]
     @Published var tunnelHealthURLs: [String: URL] = [:]
     var healthTasks: [String: Task<Void, Never>] = [:]
     @Published var discoveryBusy = false
@@ -139,7 +140,7 @@ import AppKit
             self.gatewayState = "Stopped (exit \(status))"
             self.clearPendingCommands()
             self.runningTunnelKeys.removeAll()
-            self.tunnelReady = [:]
+            self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]
             for id in Array(self.states.keys) { self.states[id] = "stopped" }
             self.stopAllTunnels()
         }
@@ -182,7 +183,7 @@ import AppKit
             notice = event["message"] as? String
             runtimeBridge?.stop()
             isAttachedGateway = false; gatewayState = "Disconnected"; attachedPort = nil
-            clearPendingCommands(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]
+            clearPendingCommands(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]
         case "response":
             if let requestID = event["id"] as? String {
                 let context = commandContexts.removeValue(forKey: requestID)
@@ -198,6 +199,8 @@ import AppKit
             if let key = event["key"] as? String {
                 if event["running"] as? Bool == true { runningTunnelKeys.insert(key) } else { runningTunnelKeys.remove(key) }
                 tunnelReady[key] = event["ready"] as? Bool ?? false
+                tunnelHealthSnapshots[key] = (event["running"] as? Bool == true) ? TunnelHealthSnapshot(event["health"] as? [String: Any]) : nil
+                tunnelHealthURLs[key] = (event["running"] as? Bool == true) ? TunnelDashboardURL.validated(event["healthURL"] as? String) : nil
                 tunnelStates[key] = event["state"] as? String ?? "状态已更新"
                 if event["running"] as? Bool == true { shownTunnelFailures[key] = nil }
                 if let code = event["errorCode"] as? String, let message = event["message"] as? String {

@@ -1,3 +1,4 @@
+import { readTunnelHealth } from './tunnel-health.js';
 import { spawn, ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
@@ -129,7 +130,9 @@ export class TunnelManager {
             if (this.running.get(r.target.key) !== r)
                 return;
             r.ready = response.status === 200;
-            this.event(r.target.key, { running: true, ready: r.ready, action: r.target.action, signature,
+            const health = await readTunnelHealth(url).catch(() => ({available:false,reason:'unavailable'}));
+            if (this.running.get(r.target.key) !== r) return;
+            this.event(r.target.key, { running: true, ready: r.ready, action: r.target.action, signature, healthURL: new URL('/', url).href, health,
                 state: r.ready ? 'readyz HTTP 200; ChatGPT call remains unverified' : `Health HTTP ${response.status}` });
         }
         catch {

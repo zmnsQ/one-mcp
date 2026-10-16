@@ -165,14 +165,6 @@ struct HarborView: View {
         }
         .onChange(of: section) { _, _ in store.notice = nil }
         .toolbar {
-            if section != .servers || !store.preferences.servers.isEmpty {
-            ToolbarItem {
-                Button { showAddMCP = true } label: { Text("添加 MCP") }
-                    .keyboardShortcut("n", modifiers: [.command, .shift])
-                    .accessibilityLabel("添加 MCP")
-                    .help("从已有应用的配置文件导入，或手动添加 MCP")
-            }
-            }
             if store.hasUnsavedChanges {
                 ToolbarItem {
                     Button { if store.save() { store.notice = "配置已保存。" } } label: { Text("保存修改") }
@@ -193,10 +185,18 @@ struct HarborView: View {
             Spacer()
             if store.hasUnsavedChanges { Label("有未保存修改", systemImage: "circle.fill").font(.caption).foregroundStyle(.orange) }
             if !store.pendingCommands.isEmpty { Text("等待网关确认：\(store.pendingCommands.count)").font(.caption).foregroundStyle(.secondary) }
-            if section != .servers || !store.preferences.servers.isEmpty {
-                Label(store.gatewayReady ? "本地网关运行中" : (store.isGatewayRunning ? "正在启动" : "未运行"), systemImage: "circle.fill")
-                    .font(.caption).foregroundStyle(store.gatewayReady ? Color.green : Color.secondary)
+            Label(store.gatewayReady ? (store.isAttachedGateway ? "已连接共享网关" : "本地网关运行中") : (store.isGatewayRunning ? "正在启动" : "网关未启动"), systemImage: "circle.fill")
+                .font(.caption).foregroundStyle(store.gatewayReady ? Color.green : Color.secondary)
+            if store.isGatewayRunning {
+                Button("停止网关", systemImage: "stop.fill") {
+                    approve("停止此共享网关及其连接？所有连接到该实例的 AI 和应用都会受到影响。") { store.stopGateway() }
+                }.disabled(store.takeoverBusy)
+            } else {
+                Button("启动网关", systemImage: "play.fill") {
+                    approve("启动本机 OneMCP 网关？不会自动连接远端隧道或启动 MCP 服务。") { store.startGateway() }
+                }.buttonStyle(.glassProminent).disabled(!store.runtimeFilesReady || store.takeoverBusy)
             }
+
         }.padding(.horizontal, 24).padding(.vertical, 18)
             .fixedSize(horizontal: false, vertical: true)
     }
@@ -223,7 +223,7 @@ struct HarborView: View {
                     HStack {
                         Label("需要先启动本机网关", systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
                         Spacer()
-                        Button("打开设置") { section = .settings }
+                        Text("点击顶部“启动网关”继续").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 GroupBox("进程配置") {
@@ -290,6 +290,9 @@ struct HarborView: View {
                 }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 HStack(spacing: 0) {
+                    VStack(alignment: .leading, spacing: 8) {
+                    Button("添加 MCP", systemImage: "plus") { showAddMCP = true }
+                        .keyboardShortcut("n", modifiers: [.command, .shift]).padding(.horizontal, 12).padding(.top, 12)
                     List(selection: $store.selectedID) {
                         ForEach(store.preferences.servers) { server in
                             VStack(alignment: .leading, spacing: 5) {
@@ -297,7 +300,8 @@ struct HarborView: View {
                                 Text(serviceStatus(server.id)).font(.caption).foregroundStyle(.secondary)
                             }.padding(.vertical, 6).tag(server.id)
                         }
-                    }.listStyle(.inset).frame(width: 210)
+                    }.listStyle(.inset)
+                    }.frame(width: 210)
                     Divider()
                     if let index = selectedIndex {
                         serverEditor(index: index).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -321,11 +325,8 @@ struct HarborView: View {
                     Text("聚合路由为 /mcp，独立路由为 /servers/{id}/mcp。两组本机路由同时存在；这里选择管理哪组隧道。切换前先停止隧道。").font(.caption).foregroundStyle(.secondary).padding(10)
                 }.disabled(store.tunnelStates.keys.contains { store.tunnelRunning($0) })
                 if !store.gatewayReady {
-                    HStack {
-                        Label("初始化、检查及启动隧道都需要本机网关就绪。", systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
-                        Spacer()
-                        Button("打开设置") { section = .settings }
-                    }
+                    Label("先点击顶部“启动网关”，再创建或复用下方连接配置。", systemImage: "info.circle")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
                 GroupBox("官方隧道客户端") {
                     Form {
@@ -417,13 +418,7 @@ struct HarborView: View {
                             Button(store.discoveryBusy ? "正在检测…" : "自动检查并修复") { store.repairEnvironment() }
                                 .disabled(store.anyProcessRunning || store.discoveryBusy)
                                 .help("检查已安装组件并修正失效路径；不会安装软件或启动服务")
-                            if store.isGatewayRunning {
-                                Button("停止服务") { approve("停止此共享网关及其连接？所有连接到该实例的 AI 和应用都会受到影响。") { store.stopGateway() } }
-                            } else {
-                                Button("启动服务") {
-                                    approve("确认运行所选 Node 可执行文件与网关脚本，仅监听 127.0.0.1:\(store.preferences.port)?") { store.startGateway() }
-                                }.buttonStyle(.glassProminent).disabled(!store.runtimeFilesReady || store.takeoverBusy)
-                            }
+
                         }
                         Text("启动后只在本机运行；连接 ChatGPT 需另外设置。")
                             .font(.caption).foregroundStyle(.secondary)
@@ -501,33 +496,42 @@ struct HarborView: View {
     }
     private func tunnelPanel(server: ServerConfig?, index: Int?) -> some View {
         let key = server?.id ?? "aggregate"
+        let usesExistingFile = server == nil && !(store.preferences.aggregateProfileFile?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         return GroupBox(server == nil ? "聚合隧道" : "独立隧道") {
             VStack(alignment: .leading, spacing: 12) {
                 if let index {
                     TextField("Tunnel ID", text: $store.preferences.servers[index].tunnelID).disabled(store.tunnelRunning(key))
-                    TextField("唯一的本机 profile 名称", text: $store.preferences.servers[index].profile).disabled(store.tunnelRunning(key))
+                    TextField("连接配置名称（字母、数字、短横线）", text: $store.preferences.servers[index].profile).disabled(store.tunnelRunning(key))
                 } else {
                     TextField("Tunnel ID", text: $store.preferences.aggregateTunnelID).disabled(store.tunnelRunning(key))
-                    TextField("唯一的本机 profile 名称", text: $store.preferences.aggregateProfile).disabled(store.tunnelRunning(key))
+                    TextField("连接配置名称（字母、数字、短横线）", text: $store.preferences.aggregateProfile).disabled(store.tunnelRunning(key))
                 }
                 if server == nil {
                     if let file = store.preferences.aggregateProfileFile, !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text("使用已有文件：\(file)").font(.caption).textSelection(.enabled)
                         Button("改用上方命名 Profile") { store.preferences.aggregateProfileFile = nil; store.tunnelProfileLocations[key] = nil }.disabled(store.tunnelRunning(key))
                     }
-                    Button("选择已有 Profile 文件…") { store.choosePath("profile") }.disabled(store.tunnelRunning(key))
+                    DisclosureGroup("可选：复用已有连接配置文件") {
+                        Text("首次使用无需选择文件。填写上方名称后点击“创建新连接配置”；已有命名配置可直接检查连接。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button("选择已有配置文件…") { store.choosePath("profile") }.disabled(store.tunnelRunning(key))
+                    }
                 }
                 if let location = store.tunnelProfileLocations[key] {
                     Text("预计查找位置（按最近请求配置）：\(location)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
                 }
+                Text(usesExistingFile ? "正在复用已有文件，无需创建新配置；先检查连接，再启动隧道。" : "首次使用：创建新连接配置 → 检查连接 → 启动隧道。已有命名配置可跳过创建。")
+                    .font(.caption).foregroundStyle(.secondary)
                 Text("下一步：\(store.tunnelNextStep(key: key))").font(.caption).foregroundStyle(.secondary)
                 Text(store.endpoint(server)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 HStack { Circle().fill(store.tunnelReady[key] == true ? Color.green : Color.gray).frame(width: 8, height: 8); Text(store.tunnelStates[key] ?? "未运行").font(.caption).foregroundStyle(.secondary) }
                 if store.doctorIsCurrent(key: key) { Text("最近一次 doctor 退出码为 0；不等同 ChatGPT 调用已验证。").font(.caption).foregroundStyle(.secondary) }
-                if let base = store.tunnelHealthURLs[key] { Link("打开官方本机状态界面", destination: base.appendingPathComponent("ui")) }
+                if store.tunnelRunning(key), let base = store.tunnelHealthURLs[key] {
+                    TunnelDashboardPanel(snapshot: store.tunnelHealthSnapshots[key]).id(base.absoluteString)
+                }
                 HStack {
-                    Button("初始化 profile") { approve("执行官方 tunnel-client init，为 \(store.endpoint(server)) 创建本机 profile？请使用新的唯一名称；若已存在请检查 CLI 输出。此操作不会启动服务。") { store.tunnelAction("init", server: server) } }.disabled(store.tunnelRunning(key) || !store.gatewayReady)
-                    Button("Doctor") { approve("执行 tunnel-client doctor？它可能使用本次会话密钥连接 OpenAI，并检查本机 MCP 端点。") { store.tunnelAction("doctor", server: server) } }.disabled(store.tunnelRunning(key) || !store.gatewayReady)
+                    Button("创建新连接配置") { approve("执行官方 tunnel-client init，为 \(store.endpoint(server)) 创建本机 profile？请使用新的唯一名称；若已存在请检查 CLI 输出。此操作不会启动服务。") { store.tunnelAction("init", server: server) } }.disabled(store.tunnelRunning(key) || !store.gatewayReady || usesExistingFile)
+                    Button("检查连接") { approve("执行 tunnel-client doctor？它可能使用本次会话密钥连接 OpenAI，并检查本机 MCP 端点。") { store.tunnelAction("doctor", server: server) } }.disabled(store.tunnelRunning(key) || !store.gatewayReady)
                     Button("启动隧道") { approve("将本机端点接入所填 OpenAI 隧道？运行期间，获授权的 OpenAI 工作区可发现并调用白名单工具，数据与结果会发送到 OpenAI。请先核对工作区和工具白名单。") { store.tunnelAction("run", server: server) } }.buttonStyle(.glassProminent).disabled(store.tunnelRunning(key) || !store.gatewayReady)
                     Button("停止") { store.stopTunnel(key) }.disabled(!store.tunnelRunning(key))
                 }

@@ -23,7 +23,7 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
             self.runtimeBridge = nil; self.isAttachedGateway = false; self.attachedPort = nil
             let wasDisconnected = self.gatewayState == "Disconnected"
             self.gatewayState = "Disconnected"; self.clearPendingCommands()
-            self.sharedRuntimeServers = []; self.states = [:]; self.tools = [:]; self.runningTunnelKeys = []; self.tunnelReady = [:]
+            self.sharedRuntimeServers = []; self.states = [:]; self.tools = [:]; self.runningTunnelKeys = []; self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]
             if !wasDisconnected { self.notice = "共享网关连接已结束。可点击启动服务重新连接，不会自动重发操作。" }
         }
         do {
@@ -50,7 +50,7 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
                let data = try? JSONSerialization.data(withJSONObject: ["type":"tools", "serverId":id, "tools":catalogue]),
                let line = String(data: data, encoding: .utf8) { consumeEvent(line) }
         }
-        runningTunnelKeys = []; tunnelReady = [:]
+        runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]
         for event in snapshot["tunnels"] as? [[String: Any]] ?? [] {
             if let data = try? JSONSerialization.data(withJSONObject: event), let line = String(data: data, encoding: .utf8) { consumeEvent(line) }
         }
