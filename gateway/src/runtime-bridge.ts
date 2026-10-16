@@ -2,6 +2,7 @@
 import {realpath} from 'node:fs/promises';
 import {join} from 'node:path';
 import {controlRequest,parseRequest} from './control.js';
+import {inspectLegacy} from './takeover.js';
 import {RuntimeClient} from './runtime-client.js';
 const [home,workspace] = process.argv.slice(2);
 if (!home || !/^[A-Za-z0-9_-]{1,64}$/.test(workspace ?? '')) throw new Error('Invalid runtime context');
@@ -13,7 +14,7 @@ async function poll() {
   if (polling || closing) return;
   polling=true;
   try { emit({type:'sharedSnapshot',snapshot:await client.snapshot()}); }
-  catch (error) { const incompatible = error instanceof Error && /identity|Unsupported|Unknown management/.test(error.message); emit({type:'sharedDisconnected',message:incompatible?'现有网关协议或工作空间不匹配。若它由旧版本启动，请明确停止旧实例后用新版启动；本应用不会强制接管。':'共享网关连接已断开，请检查状态后重新连接。'}); closing=true; process.exitCode=1; process.stdin.destroy(); clearInterval(timer); }
+  catch (error) { try {emit({type:'legacyGatewayAvailable',candidate:await inspectLegacy(root,workspace!)});}catch{} const incompatible = error instanceof Error && /identity|Unsupported|Unknown management/.test(error.message); emit({type:'sharedDisconnected',message:incompatible?'现有网关协议或工作空间不匹配。若它由旧版本启动，请明确停止旧实例后用新版启动；本应用不会强制接管。':'共享网关连接已断开，请检查状态后重新连接。'}); closing=true; process.exitCode=1; process.stdin.destroy(); clearInterval(timer); }
   finally { polling=false; }
 }
 const timer=setInterval(()=>void poll(),2000);

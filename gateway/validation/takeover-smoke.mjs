@@ -1,0 +1,22 @@
+// Protocol simulations; does not claim real Unix-socket/native takeover coverage.
+import assert from 'node:assert/strict';
+import {validLegacy,stopLegacy} from '../dist/takeover.js';
+const candidate={pid:3456,port:8787,workspaceID:'default',dev:1,ino:2};
+assert.equal(validLegacy({...candidate,servers:[],tunnels:[]},'default'),true);
+for(const bad of [{...candidate,protocolVersion:1},{...candidate,pid:0},{...candidate,workspaceID:'other'},{...candidate,servers:null}])assert.equal(validLegacy(bad,'default'),false);
+let shutdown=0,ticks=0;
+const io={inspect:async()=>candidate,shutdown:async()=>{shutdown++;},socketAbsent:async()=>ticks>1,processDead:()=>ticks>2,wait:async()=>{ticks++;}};
+await stopLegacy('/fixture','default',{ino:2,dev:1,workspaceID:'default',port:8787,pid:3456},io);assert.equal(shutdown,1);assert.equal(ticks,3);
+await assert.rejects(stopLegacy('/fixture','default',{...candidate,ino:3},io),/changed/);assert.equal(shutdown,1);
+await assert.rejects(stopLegacy('/fixture','default',candidate,{...io,inspect:async()=>{throw Error('Unsafe socket owner');}}),/Unsafe/);
+await assert.rejects(stopLegacy('/fixture','default',candidate,{...io,shutdown:async()=>{throw Error('Stop failed');}}),/Stop failed/);
+await assert.rejects(stopLegacy('/fixture','default',candidate,{...io,socketAbsent:async()=>false,wait:async()=>{}}),/not confirmed/);
+await assert.rejects(stopLegacy('/fixture','default',candidate,{...io,socketAbsent:async()=>true,processDead:()=>false,wait:async()=>{}}),/not confirmed/);
+console.log('PASS legacy candidate validation, bound identity, stop failure and exit/socket timeout fail closed; restart is not performed by takeover helper (protocol mocks)');
+const fs=await import('node:fs/promises');
+const source=await fs.readFile('../Sources/MCPHarbor/SharedRuntime.swift','utf8');
+assert.match(source,/guard status == 0, confirmedStopped/);
+assert.match(source,/self.configurationRevision\(\) == revision/);
+assert.ok(source.indexOf('guard status == 0, confirmedStopped')<source.indexOf('self.startGateway()'));
+assert.doesNotMatch(await fs.readFile('src/takeover.ts','utf8'),/unlink|rmdir|SIGKILL|SIGTERM/);
+console.log('PASS native restart gating and no forced cleanup source contracts');

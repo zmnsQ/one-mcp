@@ -4,7 +4,7 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
 
 @MainActor extension HarborStore {
     func attachExistingGatewayIfPresent(force: Bool = false) {
-        guard gateway?.running != true, runtimeBridge?.running != true,
+        guard !takeoverBusy, gateway?.running != true, runtimeBridge?.running != true,
               initialConfigurationLoaded,
               force || !sharedConnectionAttempted,
               FileManager.default.fileExists(atPath: controlSocketURL.path) else { return }
@@ -34,6 +34,7 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
         // The bridge already validates protocol, real storage root, workspace and immutable instance ID.
         guard snapshot["workspaceID"] as? String == currentWorkspaceID,
               snapshot["protocolVersion"] as? Int == 1 else { return }
+        legacyCandidateJSON = nil
         isAttachedGateway = true; gatewayState = "Ready · loopback only"
         attachedPort = snapshot["port"] as? Int
         let servers = snapshot["servers"] as? [[String: Any]] ?? []
@@ -62,6 +63,45 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
         if Set(preferences.servers.map(\.id)) != Set(sharedRuntimeServers.map(\.id)) || sharedRuntimeServers.contains(where: { live in preferences.servers.first(where: { $0.id == live.id })?.allowedTools != live.allowedTools }) {
             externalConfigurationNotice = "磁盘配置与当前运行快照不同。当前服务及权限见设置中的共享网关；保存不会自动重启或改变运行权限。"
         } else if preferences.port != attachedPort { externalConfigurationNotice = "正在使用现有网关的端口。磁盘配置不会自动改变运行实例。" }
+    }
+    var legacyGatewayPID: String {
+        guard let json = legacyCandidateJSON, let data = json.data(using: .utf8),
+              let value = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], let pid = value["pid"] as? Int else { return "未知" }
+        return String(pid)
+    }
+    func takeOverLegacyGateway() {
+        guard !takeoverBusy, let candidate = legacyCandidateJSON, initialConfigurationLoaded else { return }
+        // Persist only through the same revision-checked transaction before any disruption.
+        guard save() else { return }
+        let revision = savedRevision, workspace = currentWorkspaceID, config = preferences
+        detachSharedGateway()
+        let script = URL(fileURLWithPath: preferences.gatewayScript).deletingLastPathComponent().appendingPathComponent("takeover-command.js")
+        guard RuntimeEnvironment.readableFile(script.path) else { errorMessage = "缺少接管组件，请重新构建完整应用。"; return }
+        let process = ManagedProcess(); takeoverProcess = process; takeoverBusy = true
+        var confirmedStopped = false
+        process.onLine = { [weak self, weak process] channel, line in
+            guard let self, let process, self.takeoverProcess === process, channel == "stdout",
+                  let data = line.data(using: .utf8), let event = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { return }
+            if event["type"] as? String == "takeoverStopped" { confirmedStopped = true }
+            if event["type"] as? String == "takeoverFailed" { self.errorMessage = event["message"] as? String }
+        }
+        process.onExit = { [weak self, weak process] status in
+            guard let self, let process, self.takeoverProcess === process else { return }
+            self.takeoverBusy = false; self.takeoverProcess = nil
+            guard status == 0, confirmedStopped else {
+                self.notice = "旧网关退出未确认，未启动新实例。可重新连接检查。"; return
+            }
+            self.legacyCandidateJSON = nil
+            guard self.currentWorkspaceID == workspace, self.preferences == config,
+                  self.configurationRevision() == revision else {
+                self.notice = "旧网关已停止，但配置在等待期间发生变化。请核对后启动服务。"; return
+            }
+            self.sharedConnectionAttempted = false
+            self.notice = "旧网关已安全退出，正在启动新版网关。原有 MCP 和隧道不会自动重启。"
+            self.startGateway()
+        }
+        do { try process.start(executable: preferences.nodePath, arguments: [script.path, storageRoot.path, workspace, candidate]) }
+        catch { takeoverBusy = false; takeoverProcess = nil; errorMessage = "无法启动安全接管检查，未停止旧网关。" }
     }
     func detachSharedGateway() {
         let bridge = runtimeBridge

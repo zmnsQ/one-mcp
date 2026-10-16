@@ -66,6 +66,17 @@ struct HarborView: View {
         } detail: {
             VStack(spacing: 0) {
                 header
+                if store.legacyCandidateJSON != nil {
+                    HStack {
+                        Text("发现同一工作空间的旧版网关（PID \(store.legacyGatewayPID)），可停止后由新版接管。").font(.caption)
+                        Spacer()
+                        Button(store.takeoverBusy ? "正在停止并接管…" : "停止旧网关并接管") {
+                            approve("停止旧网关（PID \(store.legacyGatewayPID)）及其 MCP、隧道连接，然后启动新版网关？所有使用旧实例的 AI 和应用都会暂时断开。配置会先保存；工具与隧道需要之后明确启动。") {
+                                store.takeOverLegacyGateway()
+                            }
+                        }.disabled(store.takeoverBusy)
+                    }.padding(12).background(Color.orange.opacity(0.08))
+                }
                 if let externalNotice = store.externalConfigurationNotice {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.secondary)
@@ -410,7 +421,7 @@ struct HarborView: View {
                             } else {
                                 Button("启动服务") {
                                     approve("确认运行所选 Node 可执行文件与网关脚本，仅监听 127.0.0.1:\(store.preferences.port)?") { store.startGateway() }
-                                }.buttonStyle(.glassProminent).disabled(!store.runtimeFilesReady)
+                                }.buttonStyle(.glassProminent).disabled(!store.runtimeFilesReady || store.takeoverBusy)
                             }
                         }
                         Text("启动后只在本机运行；连接 ChatGPT 需另外设置。")

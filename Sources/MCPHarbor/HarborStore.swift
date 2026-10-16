@@ -48,6 +48,9 @@ import AppKit
     @Published var tunnelKey = ""
     var gateway: ManagedProcess?
     var runtimeBridge: ManagedProcess?
+    var takeoverProcess: ManagedProcess?
+    @Published var takeoverBusy = false
+    @Published var legacyCandidateJSON: String?
     @Published var isAttachedGateway = false
     @Published var sharedRuntimeServers: [SharedServerSummary] = []
     var attachedPort: Int?
@@ -113,6 +116,7 @@ import AppKit
         if logs.count > 1000 { logs.removeFirst(logs.count - 1000) }
     }
     func startGateway() {
+        guard !takeoverBusy else { return }
         guard !isGatewayRunning else { return }
         if FileManager.default.fileExists(atPath: controlSocketURL.path) { attachExistingGatewayIfPresent(force: true); return }
         resolveRuntimePaths()
@@ -166,6 +170,10 @@ import AppKit
         guard let data = line.data(using: .utf8), let event = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { log("gateway", line); return }
         let id = event["serverId"] as? String ?? "gateway"
         switch event["type"] as? String {
+        case "legacyGatewayAvailable":
+            if let candidate = event["candidate"], let data = try? JSONSerialization.data(withJSONObject: candidate, options: .sortedKeys) {
+                legacyCandidateJSON = String(data: data, encoding: .utf8)
+            }
         case "sharedSnapshot":
             if let snapshot = event["snapshot"] as? [String: Any] { applySharedSnapshot(snapshot) }
         case "sharedDisconnected":

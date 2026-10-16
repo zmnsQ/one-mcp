@@ -102,7 +102,7 @@ export async function serveControl(path: string, dispatch: (c: ControlRequest) =
         // net.Server.close removes its own Unix socket. Do not unlink a replacement path.
     };
 }
-export async function controlRequest(path: string, method: string, params?: Record<string, unknown>): Promise<unknown> {
+export async function controlRequest(path: string, method: string, params?: Record<string, unknown>, expectedSocket?: {dev:number; ino:number}): Promise<unknown> {
     await checkSocket(path);
     const id = crypto.randomUUID();
     const payload = JSON.stringify({ id, method, params }) + '\n';
@@ -114,7 +114,10 @@ export async function controlRequest(path: string, method: string, params?: Reco
         const finish = (error?: Error, result?: unknown) => { if (settled)
             return; settled = true; socket.destroy(); error ? reject(error) : resolve(result); };
         socket.setTimeout(65000, () => finish(new Error('Management timed out; operation outcome is unknown. Inspect status before retrying.')));
-        socket.on('connect', () => socket.write(payload));
+        socket.on('connect', () => { void (async()=>{
+            if(expectedSocket){await checkSocket(path);const current=await fs.lstat(path);if(current.dev!==expectedSocket.dev||current.ino!==expectedSocket.ino)throw new Error('Socket identity changed');}
+            if(!settled)socket.write(payload);
+        })().catch(e=>finish(e instanceof Error?e:new Error('Socket identity check failed'))); });
         socket.on('error', e => finish(e));
         socket.on('end', () => { if (!settled)
             finish(new Error('Incomplete management response; inspect status before retrying')); });

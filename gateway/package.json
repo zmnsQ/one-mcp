@@ -10,7 +10,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "npm run build && node validation/smoke.mjs && node validation/advanced-smoke.mjs && node validation/workflow-smoke.mjs && node validation/cli-smoke.mjs && node validation/discovery-smoke.mjs && node validation/tunnel-smoke.mjs && node validation/cooperation-smoke.mjs && node validation/startup-lease-smoke.mjs && node validation/launch-readonly-smoke.mjs && node validation/shared-runtime-smoke.mjs",
+    "test": "npm run build && node validation/smoke.mjs && node validation/advanced-smoke.mjs && node validation/workflow-smoke.mjs && node validation/cli-smoke.mjs && node validation/discovery-smoke.mjs && node validation/tunnel-smoke.mjs && node validation/cooperation-smoke.mjs && node validation/startup-lease-smoke.mjs && node validation/launch-readonly-smoke.mjs && node validation/shared-runtime-smoke.mjs && node validation/takeover-smoke.mjs",
     "cli": "node dist/cli.js"
   },
   "dependencies": {
