@@ -363,42 +363,66 @@ struct HarborView: View {
     private var connectionSettings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                EnvironmentDiscoveryView()
-                GroupBox("首启检查与恢复") {
-                    VStack(alignment: .leading, spacing: 9) {
-                        ForEach(store.setupChecks) { result in
-                            HStack(alignment: .top) { Image(systemName: result.passed ? "checkmark.circle" : "exclamationmark.circle").foregroundStyle(result.passed ? Color.green : Color.orange); VStack(alignment: .leading) { Text(result.label).font(.caption.bold()); Text(result.detail).font(.caption).foregroundStyle(.secondary) } }
+                GroupBox("运行状态") {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Label(store.gatewayReady ? "可以使用" : (store.isGatewayRunning ? "正在启动" : (store.runtimeFilesReady ? "已准备好，尚未启动" : "需要检查运行环境")),
+                              systemImage: store.gatewayReady ? "checkmark.circle.fill" : "desktopcomputer")
+                            .font(.headline).foregroundStyle(store.gatewayReady ? Color.green : Color.primary)
+                        Text(store.gatewayReady ? "返回 MCP 服务，添加或启动你需要的工具。" : store.runtimeSetupSummary)
+                            .font(.callout).foregroundStyle(.secondary)
+                        HStack(spacing: 12) {
+                            Button(store.discoveryBusy ? "正在检测…" : "自动检查并修复") { store.repairEnvironment() }
+                                .disabled(store.anyProcessRunning || store.discoveryBusy)
+                                .help("检查已安装组件并修正失效路径；不会安装软件或启动服务")
+                            if store.isGatewayRunning {
+                                Button("停止服务") { store.stopGateway() }
+                            } else {
+                                Button("启动服务") {
+                                    approve("确认运行所选 Node 可执行文件与网关脚本，仅监听 127.0.0.1:\(store.preferences.port)?") { store.startGateway() }
+                                }.buttonStyle(.glassProminent).disabled(!store.runtimeFilesReady)
+                            }
                         }
-                        HStack { Button("重新检查路径") { store.checkSetup() }; Text("这里只读检查文件；握手与联网操作需单独确认。").font(.caption).foregroundStyle(.secondary) }
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                        Text("启动后只在本机运行；连接 ChatGPT 需另外设置。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
                 }
-                GroupBox("本机网关") {
-                    Form {
-                        HStack { TextField("Node 可执行文件", text: $store.preferences.nodePath); Button("选择") { store.choosePath("node") } }
-                        HStack { TextField("已构建的网关脚本", text: $store.preferences.gatewayScript); Button("选择") { store.choosePath("gateway") } }
-                        DisclosureGroup("高级：本机监听端口") {
-                            TextField("本机端口", value: $store.preferences.port, format: .number.grouping(.never))
+                DisclosureGroup("高级设置与检测详情") {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text("通常无需修改。自定义安装位置或排查问题时再展开使用。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        GroupBox("组件路径") {
+                            VStack(alignment: .leading, spacing: 12) {
+                                Text("Node 可执行文件").font(.caption).foregroundStyle(.secondary)
+                                HStack { TextField("绝对路径", text: $store.preferences.nodePath); Button("选择…") { store.choosePath("node") } }
+                                Text("网关脚本").font(.caption).foregroundStyle(.secondary)
+                                HStack { TextField("绝对路径", text: $store.preferences.gatewayScript); Button("选择…") { store.choosePath("gateway") } }
+                                TextField("本机监听端口", value: $store.preferences.port, format: .number.grouping(.never))
+                            }.textFieldStyle(.roundedBorder).padding(12).disabled(store.isGatewayRunning)
                         }
-                    }.formStyle(.grouped).disabled(store.isGatewayRunning)
-                    HStack {
-                        Text("仅监听 127.0.0.1。启动网关不会自动启动 MCP。").font(.caption).foregroundStyle(.secondary)
-                        Spacer()
-                        if store.isGatewayRunning {
-                            Button("停止网关") { store.stopGateway() }
-                                .help("停止本机网关及由它管理的连接")
-                        } else {
-                            Button("启动网关") { approve("确认运行所选 Node 可执行文件与网关脚本，仅监听 127.0.0.1:\(store.preferences.port)?") { store.startGateway() } }
-                                .buttonStyle(.glassProminent)
-                                .help("启动本机网关，不会自动启动 MCP")
+                        DisclosureGroup("逐项检测结果") {
+                            VStack(alignment: .leading, spacing: 10) {
+                                ForEach(store.setupChecks) { result in
+                                    HStack(alignment: .top) {
+                                        Image(systemName: result.passed ? "checkmark.circle" : "exclamationmark.circle")
+                                            .foregroundStyle(result.passed ? Color.green : Color.orange)
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(result.label).font(.caption.bold())
+                                            Text(result.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                                        }
+                                    }
+                                }
+                                Button("重新检查，不修改配置") { store.checkSetup() }
+                            }.padding(.vertical, 10)
                         }
-                    }.padding(10)
+                        EnvironmentDiscoveryView()
+                    }.padding(.vertical, 12)
                 }
-                GroupBox("凭据保存：由你选择") {
+                DisclosureGroup("密钥与登录信息") {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("默认仅存在内存。可明确保存到此 Mac 的 Keychain；不会写入配置或导出文件，不会自动读取。").font(.caption).foregroundStyle(.secondary)
                         HStack {
-                            Button("保存当前凭据到 Keychain") { approve("将当前工作空间已输入的环境变量值与隧道运行密钥保存到这台 Mac 的 Keychain？仅保存非空值，未来可手动载入。") { store.saveCredentialsToKeychain() } }
-                            Button("从 Keychain 载入") { store.loadCredentialsFromKeychain() }
+                            Button("保存到系统钥匙串") { approve("将当前工作空间已输入的环境变量值与隧道运行密钥保存到这台 Mac 的 Keychain？仅保存非空值，未来可手动载入。") { store.saveCredentialsToKeychain() } }
+                            Button("从系统钥匙串载入") { store.loadCredentialsFromKeychain() }
                             Button("删除已存凭据", role: .destructive) { approve("删除此工作空间全部已存 Keychain 凭据（含已移除服务器）？这不会撤销服务端密钥，也不会停止现有进程。") { store.deleteSavedCredentials() } }
                         }
                     }.padding(12)

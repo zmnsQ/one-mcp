@@ -139,7 +139,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
             if storageReadable && !save() { return }
             try validatePreferences(loaded, requireInstalled: false)
             try persistWorkspaceIndex(activeID: id)
-            currentWorkspaceID = id; preferences = loaded; savedPreferences = loaded; storageReadable = true; savedRevision = configurationRevision()
+            currentWorkspaceID = id; preferences = loaded; resolveRuntimePaths(); savedPreferences = preferences; storageReadable = true; savedRevision = configurationRevision()
             clearRuntimeState(); selectedID = preferences.servers.first?.id; checkSetup()
         } catch { errorMessage = "工作空间未切换：\(error.localizedDescription)" }
     }
@@ -206,7 +206,8 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
             results.append(.init(label: name, passed: valid, detail: valid ? "找到可执行文件；版本尚未运行检查" : "请选择已安装程序的绝对路径"))
         }
         let script = preferences.gatewayScript
-        results.append(.init(label: "网关脚本", passed: script.hasPrefix("/") && FileManager.default.isReadableFile(atPath: script), detail: script.isEmpty ? "请选择 gateway/dist/index.js" : script))
+        let missing = RuntimeEnvironment.missingFiles(for: script)
+        results.append(.init(label: "应用运行组件", passed: missing.isEmpty, detail: missing.isEmpty ? "网关、检测程序及依赖完整" : "缺少组件：" + missing.joined(separator: "、")))
         results.append(.init(label: "本机端口", passed: (1024...65535).contains(preferences.port), detail: "\(preferences.port) · 是否被占用以启动结果为准"))
         for server in preferences.servers {
             let good = server.executable.hasPrefix("/") && FileManager.default.isExecutableFile(atPath: server.executable)

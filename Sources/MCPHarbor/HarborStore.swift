@@ -57,12 +57,10 @@ import AppKit
         }
         selectedID = preferences.servers.first?.id
         bootstrapWorkspaces()
-        if preferences.gatewayScript.isEmpty, let bundled = Bundle.main.resourceURL?.appendingPathComponent("gateway/dist/index.js"), FileManager.default.isReadableFile(atPath: bundled.path) {
-            preferences.gatewayScript = bundled.path
-        }
-        if !FileManager.default.isExecutableFile(atPath: preferences.nodePath), FileManager.default.isExecutableFile(atPath: "/usr/local/bin/node") { preferences.nodePath = "/usr/local/bin/node" }
+        let runtimePathsChanged = resolveRuntimePaths()
         savedPreferences = preferences
         savedRevision = configurationRevision()
+        if runtimePathsChanged, configurationLeaseToken != nil, storageReadable { save() }
         checkSetup()
         // Never restore process state or start services from disk.
     }
@@ -107,10 +105,8 @@ import AppKit
     }
     func startGateway() {
         guard !isGatewayRunning else { return }
-        guard (1024...65535).contains(preferences.port), preferences.gatewayScript.hasPrefix("/"),
-              FileManager.default.isReadableFile(atPath: preferences.gatewayScript) else {
-            errorMessage = "请选择 gateway/dist/index.js，端口须为1024–65535。"; return
-        }
+        resolveRuntimePaths()
+        guard runtimeFilesReady else { errorMessage = runtimeSetupSummary; checkSetup(); return }
         guard save() else { return }
         let process = ManagedProcess()
         process.onLine = { [weak self, weak process] channel, line in

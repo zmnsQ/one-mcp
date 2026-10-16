@@ -11,6 +11,7 @@ command -v npm >/dev/null || { echo "Install Node.js 22+ from its official sourc
 cd "$ROOT/gateway"
 if [[ -f package-lock.json ]]; then npm ci --ignore-scripts; else npm install --ignore-scripts; fi
 npm run build
+node "$ROOT/scripts/verify-gateway-package.mjs" "$ROOT/gateway"
 cd "$ROOT"
 swift build --configuration release
 BIN="$(swift build --configuration release --show-bin-path)"
@@ -23,6 +24,8 @@ cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 cp -R "$ROOT/gateway/dist" "$ROOT/gateway/node_modules" "$APP/Contents/Resources/gateway/"
 cp "$ROOT/gateway/package.json" "$APP/Contents/Resources/gateway/"
+# Validate the exact packaged layout, including cli.js and transitive package resolution.
+node "$ROOT/scripts/verify-gateway-package.mjs" "$APP/Contents/Resources/gateway"
 cp "$ROOT/README.md" "$OUT/README.md"
 # Signing is opt-in and uses an identity the user already has. No credentials are created.
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then

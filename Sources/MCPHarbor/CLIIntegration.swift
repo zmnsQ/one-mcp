@@ -41,8 +41,11 @@ struct EnvironmentDiscovery: Codable { let clients: [DiscoveredClient]; let prof
     }
     func detectEnvironment() {
         guard !discoveryBusy else { return }
+        resolveRuntimePaths()
+        checkSetup()
+        guard runtimeFilesReady else { discoveryError = runtimeSetupSummary; return }
         let script = URL(fileURLWithPath: preferences.gatewayScript).deletingLastPathComponent().appendingPathComponent("cli.js")
-        guard FileManager.default.isReadableFile(atPath: script.path) else { discoveryError = "请先构建 gateway，并选择 gateway/dist/index.js。"; return }
+        guard FileManager.default.isReadableFile(atPath: script.path) else { discoveryError = "应用的环境检测组件缺失，请重新构建完整应用。"; return }
         discoveryBusy = true; discoveryError = nil
         let process = Process()
         let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("onemcp-discovery-" + UUID().uuidString)

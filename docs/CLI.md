@@ -74,3 +74,9 @@ Official configuration reference: https://github.com/openai/tunnel-client/blob/m
 Executed Linux checks cover CLI configuration, mock MCP processes, tunnel subprocess lifecycle, private filesystem coordination and bounded discovery. The Unix-socket end-to-end test is shipped but could not execute in the cloud sandbox (listen EPERM); no successful socket integration is claimed. They do not validate the macOS SwiftUI executable, Keychain, Apple signing or a live ChatGPT tunnel. Run the native build on macOS before distributing a binary.
 
 Existing selected aggregate profiles retain an optional `aggregateProfileFile` reference. Doctor/run use that exact file; init refuses to overwrite it. Its credential references stay in the original official profile. Use the Settings “改用命名 Profile” button, or `config set --field aggregateProfileFile --value ""` with normal revision/apply safeguards, before creating a new named profile.
+
+## Packaged app runtime repair
+
+The native app resolves its bundled gateway from the currently running app. Saved references to an older One MCP/MCPHarbor app bundle migrate to the current complete bundle under the existing configuration lock. Explicit external gateway paths remain unchanged. Settings → 自动检查并修复 rechecks existing local Node locations and app resources; it does not install software, start a service, create credentials or change tool grants. Detailed paths remain under Advanced settings.
+
+The macOS build checks both source and copied gateway layouts using `scripts/verify-gateway-package.mjs`, including index/CLI entries, package metadata, dependency resolution and a read-only CLI help invocation. Native path-resolution XCTest cases are included, but require macOS to execute in this project.
