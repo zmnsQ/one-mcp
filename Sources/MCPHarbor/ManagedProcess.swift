@@ -15,6 +15,13 @@ import Darwin
     var onExit: ((Int32) -> Void)?
     var running: Bool { process?.isRunning == true }
 
+    static func tunnelLocationEnvironment() -> [String: String] {
+        var result: [String: String] = [:]
+        for name in ["TUNNEL_CLIENT_PROFILE_DIR", "XDG_CONFIG_HOME"] {
+            if let value = ProcessInfo.processInfo.environment[name], value.hasPrefix("/"), !value.contains("\0") { result[name] = value }
+        }
+        return result
+    }
     static func baseEnvironment() -> [String: String] {
         let source = ProcessInfo.processInfo.environment
         return ["HOME", "USER", "TMPDIR", "LANG"].reduce(into: ["PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"]) { result, key in

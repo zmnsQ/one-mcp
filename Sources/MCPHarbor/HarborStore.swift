@@ -39,6 +39,7 @@ import AppKit
     @Published var selectedID: String?
     @Published var gatewayState = "Stopped"
     @Published var states: [String: String] = [:]
+    var shownTunnelFailures: [String: String] = [:]
     @Published var tunnelStates: [String: String] = [:]
     @Published var tools: [String: [ToolInfo]] = [:]
     @Published var logs: [LogLine] = []
@@ -144,7 +145,7 @@ import AppKit
         do {
             gateway = process; gatewayState = "Starting"
             try FileManager.default.createDirectory(at: controlSocketURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-            try process.start(executable: preferences.nodePath, arguments: [preferences.gatewayScript, "--port", String(preferences.port), "--workspace-id", currentWorkspaceID, "--control-socket", controlSocketURL.path])
+            try process.start(executable: preferences.nodePath, arguments: [preferences.gatewayScript, "--port", String(preferences.port), "--workspace-id", currentWorkspaceID, "--control-socket", controlSocketURL.path], environment: ManagedProcess.tunnelLocationEnvironment())
             Task { @MainActor [weak self, weak process] in
                 try? await Task.sleep(nanoseconds: 15_000_000_000)
                 guard let self, let process, self.gateway === process, !self.gatewayReady, process.running else { return }
@@ -195,6 +196,12 @@ import AppKit
                 if event["running"] as? Bool == true { runningTunnelKeys.insert(key) } else { runningTunnelKeys.remove(key) }
                 tunnelReady[key] = event["ready"] as? Bool ?? false
                 tunnelStates[key] = event["state"] as? String ?? "状态已更新"
+                if event["running"] as? Bool == true { shownTunnelFailures[key] = nil }
+                if let code = event["errorCode"] as? String, let message = event["message"] as? String {
+                    let identity = (event["signature"] as? String ?? "") + code
+                    tunnelStates[key] = message
+                    if shownTunnelFailures[key] != identity { shownTunnelFailures[key] = identity; errorMessage = message }
+                }
                 if let exitCode = event["exitCode"] as? Int, let signature = event["signature"] as? String {
                     if event["action"] as? String == "doctor" { doctorPassed[key] = exitCode == 0; checkedTargets[key] = exitCode == 0 ? signature : nil }
                     if event["action"] as? String == "init" { initializedTargets[key] = exitCode == 0 ? signature : nil }

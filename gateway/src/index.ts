@@ -5,6 +5,7 @@ import { realpathSync } from 'node:fs';
 import { isAbsolute, dirname } from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseRequest, serveControl, ControlRequest, ControlResponse } from './control.js';
+import { safeTunnelError, TunnelActionError } from './tunnel-errors.js';
 import { TunnelManager } from './tunnels.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -343,7 +344,7 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
     return { type: 'response', id: command.id, ok: true, result };
   } catch (error) {
     const server = command.params?.server as Config | undefined;
-    const message = command.method === 'tunnelAction' ? 'Tunnel operation rejected; verify executable, unique profile, tunnel ID, session key and running server' : safeMessage(error, server);
+    const message = command.method === 'tunnelAction' ? (safeTunnelError(error) ?? new TunnelActionError('TUNNEL_FAILED').message) : safeMessage(error, server);
     if (command.method === 'startServer' && typeof server?.id === 'string' && !managed.get(server.id)?.ready) {
       emit({ type: 'serverStatus', serverId: server.id, status: 'error', message });
     }

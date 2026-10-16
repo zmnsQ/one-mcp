@@ -330,7 +330,8 @@ struct HarborView: View {
                 GroupBox("官方隧道客户端") {
                     Form {
                         HStack { TextField("tunnel-client 绝对路径", text: $store.preferences.tunnelClientPath); Button("选择") { store.choosePath("tunnel") } }
-                        SecureField("运行时 API key：仅内存保存", text: $store.tunnelKey)
+                        SecureField("可选：本次会话 Runtime API key", text: $store.tunnelKey)
+                        Text("已有 Profile 的 file: 或内置凭据由官方客户端自行使用，留空不会覆盖。若 Profile 依赖 env:CONTROL_PLANE_API_KEY，请在这里提供本次值。不会自动读取或复制凭据。").font(.caption).foregroundStyle(.secondary)
                     }.formStyle(.grouped)
                     Text("需已有 tunnel、Platform Read + Use 权限及正确的 ChatGPT 工作区关联。密钥和隧道由你自行创建。").font(.caption).foregroundStyle(.secondary).padding(10)
                     HStack { Link("安装官方 tunnel-client", destination: URL(string: "https://github.com/openai/tunnel-client#readme")!); Link("Platform 隧道设置", destination: URL(string: "https://platform.openai.com/settings/organization/tunnels")!); Link("官方配置文档", destination: URL(string: "https://developers.openai.com/api/docs/guides/secure-mcp-tunnels")!); Link("ChatGPT Plugins", destination: URL(string: "https://chatgpt.com/plugins")!) }.padding(10)

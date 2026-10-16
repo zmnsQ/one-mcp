@@ -1,6 +1,8 @@
 import { spawn, ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
+import { TunnelActionError, classifyTunnelDiagnostic, tunnelErrors, TunnelErrorCode } from './tunnel-errors.js';
+import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
 type Target = {
     key: string;
@@ -20,6 +22,14 @@ type Running = {
     folder?: string;
     checking: boolean;
 };
+export function profileLocationEnvironment(source:NodeJS.ProcessEnv):Record<string,string> {
+    const result:Record<string,string>={};
+    for(const name of ['TUNNEL_CLIENT_PROFILE_DIR','XDG_CONFIG_HOME']) {
+        const value=source[name];
+        if(value && isAbsolute(value) && !value.includes('\0'))result[name]=value;
+    }
+    return result;
+}
 export class TunnelManager {
     private running = new Map<string, Running>();
     private results = new Map<string, object>();
@@ -32,23 +42,18 @@ export class TunnelManager {
     }
     async action(raw: unknown): Promise<unknown> {
         const t = raw as Target;
-        if (!t || typeof t.key !== 'string' || typeof t.profile !== 'string' || t.profile.length > 256 || typeof t.tunnelID !== 'string' || !['init', 'doctor', 'run'].includes(t.action) || !/^[\w-]{1,64}$/.test(t.key) ||
-            (!t.profileFile && !/^[\w-]{1,64}$/.test(t.profile)) || !/^tunnel_[\w-]+$/.test(t.tunnelID) ||
-            typeof t.executable !== 'string' || !isAbsolute(t.executable) || t.executable.includes('\0') ||
-            typeof t.runtimeKey !== 'string' || !t.runtimeKey || t.runtimeKey.length > 65536 || t.runtimeKey.includes('\0'))
-            throw new Error('Invalid tunnel settings; use a configured absolute executable and session key');
-        if (t.profileFile !== undefined && typeof t.profileFile !== 'string')
-            throw new Error('Invalid profile file');
-        if (t.profileFile && (typeof t.profileFile !== 'string' || !isAbsolute(t.profileFile) || t.profileFile.includes('\0')))
-            throw new Error('Invalid profile file');
-        if (t.profileFile && t.action === 'init')
-            throw new Error('Selected existing profile must not be initialized or overwritten');
-        if (t.key !== 'aggregate' && t.action !== 'init' && !this.serverReady(t.key))
-            throw new Error('Start this MCP server before connecting its tunnel');
-        if (this.running.has(t.key))
-            throw new Error('Tunnel operation already running');
-        if ([...this.running.values()].some(r => r.target.profile === t.profile || r.target.tunnelID === t.tunnelID))
-            throw new Error('Profile or tunnel ID is already in use');
+        if (!t || typeof t.key !== 'string' || !/^[\w-]{1,64}$/.test(t.key) || !['init','doctor','run'].includes(t.action)) throw new TunnelActionError('TUNNEL_TARGET');
+        if (typeof t.profile !== 'string' || t.profile.length > 256 || (!t.profileFile && !/^[\w-]{1,64}$/.test(t.profile))) throw new TunnelActionError('TUNNEL_PROFILE');
+        if (typeof t.tunnelID !== 'string' || !/^tunnel_[\w-]+$/.test(t.tunnelID)) throw new TunnelActionError('TUNNEL_ID');
+        if (typeof t.executable !== 'string' || !isAbsolute(t.executable) || t.executable.includes('\0')) throw new TunnelActionError('TUNNEL_EXECUTABLE');
+        try { await fs.access(t.executable, constants.X_OK); } catch { throw new TunnelActionError('TUNNEL_EXECUTABLE'); }
+        if (t.runtimeKey !== undefined && (typeof t.runtimeKey !== 'string' || t.runtimeKey.length > 65536 || t.runtimeKey.includes('\0'))) throw new TunnelActionError('TUNNEL_KEY_FORMAT');
+        if (t.profileFile !== undefined && (typeof t.profileFile !== 'string' || !isAbsolute(t.profileFile) || t.profileFile.includes('\0'))) throw new TunnelActionError('TUNNEL_PROFILE_FILE');
+        if (t.profileFile && t.action === 'init') throw new TunnelActionError('TUNNEL_EXISTING_INIT');
+        if (t.profileFile) { try { if (!(await fs.stat(t.profileFile)).isFile()) throw new Error(); await fs.access(t.profileFile, constants.R_OK); } catch { throw new TunnelActionError('TUNNEL_PROFILE_FILE'); } }
+        if (t.key !== 'aggregate' && t.action !== 'init' && !this.serverReady(t.key)) throw new TunnelActionError('TUNNEL_BACKEND');
+        if (this.running.has(t.key)) throw new TunnelActionError('TUNNEL_BUSY');
+        if ([...this.running.values()].some(r => r.target.profile === t.profile || r.target.tunnelID === t.tunnelID)) throw new TunnelActionError('TUNNEL_DUPLICATE');
         const endpoint = `http://127.0.0.1:${this.port}${t.key === 'aggregate' ? '/mcp' : `/servers/${t.key}/mcp`}`;
         const signature = [t.executable, t.profile, t.tunnelID, endpoint, t.profileFile ?? ''].join('\n');
         const args = t.profileFile ? [t.action, '--profile-file', t.profileFile] : [t.action, '--profile', t.profile];
@@ -63,26 +68,30 @@ export class TunnelManager {
             args.push('--health.listen-addr', '127.0.0.1:0', '--health.url-file', join(folder, 'url'));
         }
         const child = spawn(t.executable, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false,
-            env: { PATH: process.env.PATH, HOME: process.env.HOME, CONTROL_PLANE_API_KEY: t.runtimeKey, CONTROL_PLANE_TUNNEL_ID: t.tunnelID, MCP_SERVER_URL: endpoint } });
+            env: { PATH: process.env.PATH, HOME: process.env.HOME, ...profileLocationEnvironment(process.env), ...(t.runtimeKey ? {CONTROL_PLANE_API_KEY: t.runtimeKey} : {}), CONTROL_PLANE_TUNNEL_ID: t.tunnelID, MCP_SERVER_URL: endpoint } });
         let resolveClosed!: () => void;
         const r: Running = { target: { key: t.key, action: t.action, executable: t.executable, profile: t.profile, tunnelID: t.tunnelID }, child,
             ready: false, checking: false, folder, closed: new Promise(resolve => { resolveClosed = resolve; }) };
         this.running.set(t.key, r);
         // No raw tunnel stdout/stderr enters logs, as credentials may appear in diagnostics.
-        child.stdout?.resume();
-        child.stderr?.resume();
+        let diagnostic: TunnelErrorCode | undefined;
+        let diagnosticTail = '';
+        const inspect = (chunk: Buffer) => { diagnosticTail = (diagnosticTail + chunk.toString('utf8')).slice(-4096); diagnostic = classifyTunnelDiagnostic(diagnosticTail) ?? diagnostic; };
+        child.stdout?.on('data', inspect); child.stderr?.on('data', inspect);
         child.once('close', code => {
             clearInterval(r.timer);
             if (this.running.get(t.key) === r)
                 this.running.delete(t.key);
-            this.event(t.key, { running: false, ready: false, action: t.action, exitCode: code, signature,
+            const failure = code === 0 ? undefined : (diagnostic ?? 'TUNNEL_FAILED');
+            diagnosticTail = '';
+            this.event(t.key, { ...(failure ? {errorCode: failure, message: tunnelErrors[failure]} : {}), running: false, ready: false, action: t.action, exitCode: code, signature,
                 state: t.action === 'run' ? `Stopped (${code ?? 'signal'})` : `${t.action} ${code === 0 ? 'passed' : 'failed'}` });
             if (folder)
                 void fs.rm(folder, { recursive: true, force: true });
             resolveClosed();
         });
         try {
-            await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', () => reject(new Error('Tunnel executable could not be launched'))); });
+            await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', () => reject(new TunnelActionError('TUNNEL_EXECUTABLE'))); });
         }
         catch (e) {
             await r.closed;

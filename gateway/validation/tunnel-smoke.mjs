@@ -13,6 +13,7 @@ try {
  for(let i=0;i<100&&!events.some(e=>e.exitCode===0);i++)await new Promise(r=>setTimeout(r,20));
  assert.ok(events.some(e=>e.action==='doctor'&&e.exitCode===0));assert.ok(!JSON.stringify(events).includes(target.runtimeKey));
  const capture=path.join(dir,'argv.json');
+ await fs.writeFile(path.join(dir,'foo.prod.yaml'),'control_plane: {}\n');
  const fileFixture=path.join(dir,'file-fixture');
  await fs.writeFile(fileFixture,`#!/bin/sh\nprintf '%s\\n' "$@" > '${capture}'\nexit 0\n`,{mode:0o700});
  await manager.action({...target,executable:fileFixture,profile:'foo.prod',profileFile:path.join(dir,'foo.prod.yaml')});

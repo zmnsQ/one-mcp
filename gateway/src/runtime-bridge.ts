@@ -1,4 +1,5 @@
 /** Private stdin/stdout GUI adapter. Closing this process never stops the gateway. */
+import {safeTunnelError} from './tunnel-errors.js';
 import {realpath} from 'node:fs/promises';
 import {join} from 'node:path';
 import {controlRequest,parseRequest} from './control.js';
@@ -35,7 +36,7 @@ process.stdin.on('data',(chunk:string)=>{
         pending++;
         try {const result=await client.command(c.method,c.params);emit({type:'response',id,ok:true,result});}
         finally {pending--;}
-      }catch{emit({type:'response',id,ok:false,error:'共享网关操作未完成；请检查状态，勿盲目重复提交。'});}
+      }catch(error){emit({type:'response',id,ok:false,error:safeTunnelError(error) ?? '共享网关操作未完成；请检查状态，勿盲目重复提交。'});}
     })();
   }
 });

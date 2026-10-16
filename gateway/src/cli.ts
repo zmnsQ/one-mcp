@@ -140,8 +140,7 @@ try {
             const key = String(opts.id ?? 'aggregate');
             const s = key === 'aggregate' ? undefined : server();
             await mutation({ operation: verb, key, profile: s?.profile ?? w.config.aggregateProfile }, async () => { await live(); if (verb === 'stop')
-                return rpc('stopTunnel', { key }); const runtimeKey = process.env.CONTROL_PLANE_API_KEY; if (!runtimeKey)
-                throw new Error('CONTROL_PLANE_API_KEY is required in this session environment'); return rpc('tunnelAction', { key, action: verb === 'start' ? 'run' : verb, executable: w.config.tunnelClientPath, profile: s?.profile ?? w.config.aggregateProfile, tunnelID: s?.tunnelID ?? w.config.aggregateTunnelID, runtimeKey, profileFile: key === 'aggregate' ? w.config.aggregateProfileFile : undefined }); });
+                return rpc('stopTunnel', { key }); const runtimeKey = process.env.CONTROL_PLANE_API_KEY ?? '';  return rpc('tunnelAction', { key, action: verb === 'start' ? 'run' : verb, executable: w.config.tunnelClientPath, profile: s?.profile ?? w.config.aggregateProfile, tunnelID: s?.tunnelID ?? w.config.aggregateTunnelID, runtimeKey, profileFile: key === 'aggregate' ? w.config.aggregateProfileFile : undefined }); });
         }
         else
             throw new Error('Unknown command; use onemcp help');
