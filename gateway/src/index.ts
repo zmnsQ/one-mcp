@@ -3,6 +3,8 @@ import http, { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash } from 'node:crypto';
 import { isAbsolute } from 'node:path';
 import { createInterface } from 'node:readline';
+import { parseRequest, serveControl, ControlRequest, ControlResponse } from './control.js';
+import { TunnelManager } from './tunnels.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -14,7 +16,7 @@ type Config = { id: string; name: string; executable: string; arguments: string[
 type Managed = { config: Config; client: Client; transport: StdioClientTransport; tools: Tool[];
   ready: boolean; closing: boolean; calls: number; revision: number; catalogRevision: number; lifetime: AbortController;
   discovery?: Promise<Tool[]>; stopping?: Promise<void> };
-type Command = { id: string; method: string; params?: { server?: Config; serverId?: string } };
+
 const managed = new Map<string, Managed>();
 const stopping = new Set<Promise<void>>();
 const activeRequests = new Set<Server>();
@@ -26,6 +28,21 @@ if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Inv
 const emit = (event: object) => process.stdout.write(JSON.stringify(event) + '\n');
 const MAX_BODY = 1024 * 1024;
 const MAX_REQUESTS = 32;
+const tunnelManager = new TunnelManager(port, emit, id => managed.get(id)?.ready === true);
+const controlIndex = process.argv.indexOf('--control-socket');
+const workspaceIndex = process.argv.indexOf('--workspace-id');
+const workspaceID = workspaceIndex >= 0 ? process.argv[workspaceIndex + 1] : 'default';
+let closeControl: (() => Promise<void>) | undefined;
+let chain = Promise.resolve();
+function dispatch(command: ControlRequest): Promise<ControlResponse> {
+  const operation = chain.then(() => perform(command));
+  chain = operation.then(() => undefined, () => undefined);
+  return operation;
+}
+if (controlIndex >= 0) {
+  try { closeControl = await serveControl(process.argv[controlIndex + 1] ?? '', dispatch); }
+  catch { process.stderr.write('Private control socket unavailable; inspect ownership and an existing gateway before retrying.\n'); process.exit(1); }
+}
 
 function safeMessage(value: unknown, config?: Config): string {
   let text = value instanceof Error ? value.message : String(value);
@@ -270,46 +287,62 @@ httpServer.headersTimeout = 10000;
 httpServer.on('error', error => { emit({ type: 'log', message: safeMessage(error) }); void shutdown(1); });
 httpServer.listen(port, '127.0.0.1', () => { if (!closing) emit({ type: 'ready', port }); });
 
-let chain = Promise.resolve();
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 lines.on('line', line => {
   if (Buffer.byteLength(line) > MAX_BODY) { emit({ type: 'log', message: 'Oversized control line rejected' }); return; }
-  chain = chain.then(async () => {
-    let command: Command;
-    try { command = JSON.parse(line) as Command; } catch { emit({ type: 'log', message: 'Malformed control JSON' }); return; }
-    if (!command || typeof command.id !== 'string' || !command.id || command.id.length > 128) return;
-    try {
-      if (closing) throw new Error('Gateway is shutting down');
-      switch (command.method) {
-        case 'startServer': await start(command.params?.server); break;
-        case 'stopServer': {
-          const id = command.params?.serverId;
-          if (typeof id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new Error('Invalid server id');
-          await stop(id); break;
-        }
-        case 'listTools': {
-          const m = managed.get(command.params?.serverId ?? '');
-          if (!m?.ready) throw new Error('Server is not running');
-          await discover(m); break;
-        }
-        case 'shutdown': emit({ type: 'response', id: command.id, ok: true }); await shutdown(0); return;
-        default: throw new Error('Unknown management method');
-      }
-      emit({ type: 'response', id: command.id, ok: true });
-    } catch (error) {
-      // A rejected duplicate start must not change a running server's UI status.
-      if (command.method === 'startServer' && typeof command.params?.server?.id === 'string' && !managed.get(command.params.server.id)?.ready) {
-        emit({ type: 'serverStatus', serverId: command.params.server.id, status: 'error', message: safeMessage(error, command.params.server) });
-      }
-      emit({ type: 'response', id: command.id, ok: false, error: safeMessage(error, command.params?.server) });
-    }
-  }).catch(() => { emit({ type: 'log', message: 'Control request failed' }); });
+  try {
+    const command = parseRequest(JSON.parse(line));
+    void dispatch(command).then(emit);
+  } catch { emit({ type: 'log', message: 'Malformed control JSON' }); }
 });
+async function perform(command: ControlRequest): Promise<ControlResponse> {
+  try {
+    if (closing) throw new Error('Gateway is shutting down');
+    let result: unknown = null;
+    const rawID = command.params?.serverId;
+    const requireID = () => {
+      if (typeof rawID !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(rawID)) throw new Error('Invalid server id');
+      return rawID;
+    };
+    switch (command.method) {
+      case 'status': result = { pid: process.pid, port, workspaceID,
+        servers: [...managed.values()].map(m => ({ id: m.config.id, name: m.config.name, running: m.ready, allowedTools: m.config.allowedTools, toolCount: m.tools.length })),
+        tunnels: tunnelManager.snapshot() }; break;
+      case 'startServer': await start(command.params?.server); break;
+      case 'stopServer': { const id = requireID(); await tunnelManager.stopAll(); await stop(id); break; }
+      case 'listTools': {
+        const m = managed.get(requireID());
+        if (!m?.ready) throw new Error('Server is not running');
+        await discover(m);
+        result = m.tools.map(t => ({ ...t, allowed: m.config.allowedTools.includes(t.name), publicName: publicName(m.config.id, t.name) })); break;
+      }
+      case 'tunnelAction': result = await tunnelManager.action(command.params); break;
+      case 'stopTunnel': {
+        const key = command.params?.key;
+        if (typeof key !== 'string' || !/^[\w-]{1,64}$/.test(key)) throw new Error('Invalid tunnel key');
+        await tunnelManager.stop(key); break;
+      }
+      case 'stopAllTunnels': await tunnelManager.stopAll(); break;
+      case 'shutdown': setTimeout(() => { void shutdown(0); }, 100); break;
+      default: throw new Error('Unknown management method');
+    }
+    return { type: 'response', id: command.id, ok: true, result };
+  } catch (error) {
+    const server = command.params?.server as Config | undefined;
+    const message = command.method === 'tunnelAction' ? 'Tunnel operation rejected; verify executable, unique profile, tunnel ID, session key and running server' : safeMessage(error, server);
+    if (command.method === 'startServer' && typeof server?.id === 'string' && !managed.get(server.id)?.ready) {
+      emit({ type: 'serverStatus', serverId: server.id, status: 'error', message });
+    }
+    return { type: 'response', id: command.id, ok: false, error: message };
+  }
+}
 async function shutdown(code = 0): Promise<void> {
   if (closing) return; closing = true;
   httpServer.close();
   const forceExit = setTimeout(() => { httpServer.closeAllConnections(); process.exit(code); }, 8000);
   forceExit.unref();
+  await tunnelManager.stopAll();
+  await closeControl?.();
   await Promise.all([...activeRequests].map(bridge => bridge.close().catch(() => undefined)));
   await Promise.all([...managed.values()].map(m => stopManaged(m).catch(() => undefined)));
   await Promise.allSettled([...stopping]);

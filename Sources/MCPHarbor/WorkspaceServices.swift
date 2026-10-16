@@ -67,7 +67,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
     var storageRoot: URL { fileURL.deletingLastPathComponent() }
     var workspaceDirectory: URL { storageRoot.appendingPathComponent("Workspaces", isDirectory: true) }
     var activeConfigurationURL: URL { currentWorkspaceID == "default" ? fileURL : workspaceDirectory.appendingPathComponent(currentWorkspaceID + ".json") }
-    var anyProcessRunning: Bool { isGatewayRunning || tunnels.values.contains { $0.running } }
+    var anyProcessRunning: Bool { isGatewayRunning || !runningTunnelKeys.isEmpty }
     func bootstrapWorkspaces() {
         let indexURL = storageRoot.appendingPathComponent("workspaces.json")
         if FileManager.default.fileExists(atPath: indexURL.path) {
@@ -90,6 +90,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
             catch { errorMessage = "工作空间配置无法读取，已保留原文件。"; storageReadable = false }
         }
         selectedID = preferences.servers.first?.id
+        savedRevision = configurationRevision()
         checkSetup()
     }
     func backupBeforeRecovery() throws {
@@ -100,8 +101,10 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         }
     }
     func persistWorkspaceIndex(activeID: String? = nil) throws {
+        guard configurationLeaseToken != nil else { throw CocoaError(.fileWriteNoPermission) }
         let data = try JSONEncoder().encode(WorkspaceIndex(activeID: activeID ?? currentWorkspaceID, workspaces: workspaces))
         try data.write(to: storageRoot.appendingPathComponent("workspaces.json"), options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: storageRoot.appendingPathComponent("workspaces.json").path)
     }
     @discardableResult func createWorkspace(name: String) -> Bool {
         guard !anyProcessRunning else { errorMessage = "请先停止所有进程，再创建或切换工作空间。"; return false }
@@ -113,11 +116,12 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         let oldID = currentWorkspaceID, oldWorkspaces = workspaces, oldReadable = storageReadable
         let record = WorkspaceRecord(id: UUID().uuidString.lowercased(), name: name)
         workspaces.append(record); currentWorkspaceID = record.id
-        preferences.servers = []; preferences.aggregateTunnelID = ""
+        preferences.servers = []; preferences.aggregateTunnelID = ""; preferences.aggregateProfileFile = nil
         preferences.aggregateProfile = "mcpharbor-" + String(record.id.prefix(8))
         storageReadable = true
+        savedRevision = configurationRevision()
         guard save() else {
-            preferences = oldPreferences; savedPreferences = oldSaved; currentWorkspaceID = oldID
+            preferences = oldPreferences; savedPreferences = oldSaved; currentWorkspaceID = oldID; savedRevision = configurationRevision()
             workspaces = oldWorkspaces; storageReadable = oldReadable
             return false
         }
@@ -135,7 +139,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
             if storageReadable && !save() { return }
             try validatePreferences(loaded, requireInstalled: false)
             try persistWorkspaceIndex(activeID: id)
-            currentWorkspaceID = id; preferences = loaded; savedPreferences = loaded; storageReadable = true
+            currentWorkspaceID = id; preferences = loaded; savedPreferences = loaded; storageReadable = true; savedRevision = configurationRevision()
             clearRuntimeState(); selectedID = preferences.servers.first?.id; checkSetup()
         } catch { errorMessage = "工作空间未切换：\(error.localizedDescription)" }
     }
@@ -181,7 +185,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         guard Set(value.servers.map(\.id)).count == value.servers.count else { throw invalid("服务器ID重复。") }
         for server in value.servers {
             guard server.id.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil else { throw invalid("服务器ID无效。") }
-            guard server.allowedTools.count <= 500, Set(server.allowedTools).count == server.allowedTools.count, server.allowedTools.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 1024 }) else { throw invalid("工具白名单包含重复、空名称或过多条目。") }
+            guard server.allowedTools.count <= 500, Set(server.allowedTools).count == server.allowedTools.count, server.allowedTools.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 && $0 != "*" }) else { throw invalid("工具白名单包含重复、空名称或过多条目。") }
             guard !server.name.isEmpty, server.name.count <= 100 else { throw invalid("服务器名称须为1–100字。") }
             guard server.arguments.count <= 128, server.arguments.allSatisfy({ $0.utf8.count < 8192 }) else { throw invalid("命令参数过多或过长。") }
             guard Set(server.environmentKeys).count == server.environmentKeys.count,

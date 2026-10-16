@@ -16,6 +16,12 @@ import AppKit
     @Published var doctorPassed: [String: Bool] = [:]
     @Published var tunnelHealthURLs: [String: URL] = [:]
     var healthTasks: [String: Task<Void, Never>] = [:]
+    @Published var discoveryBusy = false
+    @Published var discoveryError: String?
+    @Published var environmentDiscovery: EnvironmentDiscovery?
+    @Published var runningTunnelKeys = Set<String>()
+    var configurationLeaseToken: String?
+    var savedRevision = "missing"
     var storageReadable = true
     var redactionValues = Set<String>()
     @Published var preferences = Preferences()
@@ -44,6 +50,7 @@ import AppKit
     init() {
         fileURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MCPHarbor", isDirectory: true).appendingPathComponent("settings.json")
+        acquireConfigurationLease()
         if FileManager.default.fileExists(atPath: fileURL.path) {
             do { preferences = try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: fileURL)) }
             catch { errorMessage = "保存的配置无法读取；已保留原文件。请导入有效配置恢复。"; storageReadable = false }
@@ -55,10 +62,14 @@ import AppKit
         }
         if !FileManager.default.isExecutableFile(atPath: preferences.nodePath), FileManager.default.isExecutableFile(atPath: "/usr/local/bin/node") { preferences.nodePath = "/usr/local/bin/node" }
         savedPreferences = preferences
+        savedRevision = configurationRevision()
         checkSetup()
         // Never restore process state or start services from disk.
     }
     @discardableResult func save() -> Bool {
+        guard configurationLeaseToken != nil else { errorMessage = "配置写锁不可用，请重新打开应用。"; return false }
+        guard isGatewayRunning || !FileManager.default.fileExists(atPath: controlSocketURL.path) else { errorMessage = "另一网关正在使用配置，请先停止该网关。"; return false }
+        guard savedRevision == configurationRevision() else { errorMessage = "磁盘配置已变化，请重新打开应用并核对后保存。"; return false }
         guard storageReadable else { errorMessage = "配置文件损坏，禁止覆盖。请先导入有效配置或创建新工作空间。"; return false }
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -68,6 +79,7 @@ import AppKit
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: activeConfigurationURL.path)
             try persistWorkspaceIndex()
             savedPreferences = preferences
+            savedRevision = configurationRevision()
             return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
@@ -109,12 +121,15 @@ import AppKit
             guard let self, let process, self.gateway === process else { return }
             self.gatewayState = "Stopped (exit \(status))"
             self.clearPendingCommands()
+            self.runningTunnelKeys.removeAll()
+            self.tunnelReady = [:]
             for id in Array(self.states.keys) { self.states[id] = "stopped" }
             self.stopAllTunnels()
         }
         do {
             gateway = process; gatewayState = "Starting"
-            try process.start(executable: preferences.nodePath, arguments: [preferences.gatewayScript, "--port", String(preferences.port)])
+            try FileManager.default.createDirectory(at: controlSocketURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            try process.start(executable: preferences.nodePath, arguments: [preferences.gatewayScript, "--port", String(preferences.port), "--workspace-id", currentWorkspaceID, "--control-socket", controlSocketURL.path])
             save()
         } catch { gatewayState = "Stopped"; errorMessage = error.localizedDescription }
     }
@@ -139,6 +154,16 @@ import AppKit
                 commandTimeouts.removeValue(forKey: requestID)?.cancel()
                 if event["ok"] as? Bool == false, let context, context.method == "startServer", let serverID = context.serverID, states[serverID] == "starting" {
                     states[serverID] = "error"
+                }
+            }
+        case "tunnelStatus":
+            if let key = event["key"] as? String {
+                if event["running"] as? Bool == true { runningTunnelKeys.insert(key) } else { runningTunnelKeys.remove(key) }
+                tunnelReady[key] = event["ready"] as? Bool ?? false
+                tunnelStates[key] = event["state"] as? String ?? "状态已更新"
+                if let exitCode = event["exitCode"] as? Int, let signature = event["signature"] as? String {
+                    if event["action"] as? String == "doctor" { doctorPassed[key] = exitCode == 0; checkedTargets[key] = exitCode == 0 ? signature : nil }
+                    if event["action"] as? String == "init" { initializedTargets[key] = exitCode == 0 ? signature : nil }
                 }
             }
         case "ready": gatewayState = "Ready · loopback only"
@@ -214,73 +239,23 @@ import AppKit
     func endpoint(_ server: ServerConfig?) -> String {
         "http://127.0.0.1:\(preferences.port)" + (server.map { "/servers/\($0.id)/mcp" } ?? "/mcp")
     }
-    func tunnelRunning(_ key: String) -> Bool { tunnels[key]?.running == true }
+    func tunnelRunning(_ key: String) -> Bool { runningTunnelKeys.contains(key) }
     func tunnelAction(_ action: String, server: ServerConfig?) {
         let key = server?.id ?? "aggregate"
-        guard ["init", "doctor", "run"].contains(action) else { errorMessage = "不支持的隧道操作。"; return }
-        guard !tunnelRunning(key) else { errorMessage = "请先停止当前隧道进程。"; return }
-        let profile = server?.profile ?? preferences.aggregateProfile
-        let tunnelID = server?.tunnelID ?? preferences.aggregateTunnelID
-        guard profile.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil,
-              tunnelID.hasPrefix("tunnel_"), !tunnelKey.isEmpty else {
-            errorMessage = "请输入 tunnel_ ID、仅含字母数字连字符的 profile 名称及本次会话密钥。"; return
-        }
-        guard !tunnelTargets.contains(where: { entry in
-            entry.key != key && tunnelRunning(entry.key) && (entry.value.profile == profile || entry.value.tunnelID == tunnelID)
-        }) else { errorMessage = "另一运行中的连接正在使用相同 profile 或 tunnel ID，请为独立出口使用不同值。"; return }
-        guard gatewayReady || action == "init" else { errorMessage = "执行 doctor 或 run 前请启动本机网关。"; return }
+        guard gatewayReady, !tunnelRunning(key), ["init", "doctor", "run"].contains(action) else { errorMessage = "请启动网关并等待当前隧道操作完成。"; return }
         guard save() else { return }
-        doctorPassed[key] = false
-        checkedTargets[key] = nil
-        let targetSignature = tunnelTargetSignature(key: key)
-        var arguments = [action, "--profile", profile]
-        if action == "init" {
-            arguments += ["--sample", "sample_mcp_remote_no_auth", "--tunnel-id", tunnelID, "--mcp-server-url", endpoint(server)]
-        } else if action == "doctor" { arguments += ["--explain"] }
-        var healthFile: URL?
-        if action == "run" {
-            do {
-                let directory = FileManager.default.temporaryDirectory.appendingPathComponent("mcpharbor-" + UUID().uuidString, isDirectory: true)
-                try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-                let file = directory.appendingPathComponent("health-url")
-                healthFile = file
-                arguments += ["--health.listen-addr", "127.0.0.1:0", "--health.url-file", file.path]
-            } catch { errorMessage = error.localizedDescription; return }
-        }
-        let process = ManagedProcess()
-        process.onLine = { [weak self] _, line in self?.log("tunnel:\(key)", line) }
-        process.onExit = { [weak self, weak process] status in
-            if let healthFile { try? FileManager.default.removeItem(at: healthFile.deletingLastPathComponent()) }
-            guard let self, let process, self.tunnels[key] === process else { return }
-            self.healthTasks[key]?.cancel(); self.healthTasks[key] = nil
-            self.tunnelReady[key] = false; self.tunnelHealthURLs[key] = nil
-            if action == "doctor" {
-                self.doctorPassed[key] = status == 0
-                self.checkedTargets[key] = status == 0 ? targetSignature : nil
-                self.tunnelStates[key] = status == 0 ? "Doctor 检查通过（退出码 0）" : "Doctor 失败（退出码 \(status)），请查看日志后重试"
-            } else if action == "init" {
-                self.initializedTargets[key] = status == 0 ? targetSignature : nil
-                self.tunnelStates[key] = status == 0 ? "Profile 初始化完成，尚未连接" : "初始化失败（退出码 \(status)）"
-            } else { self.tunnelStates[key] = "已停止（退出码 \(status)）" }
-        }
-        do {
-            redactionValues.insert(tunnelKey)
-            tunnels[key] = process
-            tunnelTargets[key] = (profile: profile, tunnelID: tunnelID)
-            try process.start(executable: preferences.tunnelClientPath, arguments: arguments, environment: ["CONTROL_PLANE_API_KEY": tunnelKey, "CONTROL_PLANE_TUNNEL_ID": tunnelID, "MCP_SERVER_URL": endpoint(server)])
-            tunnelStates[key] = action == "run" ? "进程已启动，等待实际 readiness" : "正在执行 \(action)"
-            tunnelReady[key] = false
-            if let healthFile { monitorTunnel(key: key, process: process, file: healthFile) }
-            save()
-        } catch {
-            tunnelStates[key] = "启动失败"; errorMessage = error.localizedDescription
-            if let healthFile { try? FileManager.default.removeItem(at: healthFile.deletingLastPathComponent()) }
+        redactionValues.insert(tunnelKey)
+        var parameters: [String: Any] = ["key": key, "action": action, "executable": preferences.tunnelClientPath,
+            "profile": server?.profile ?? preferences.aggregateProfile, "tunnelID": server?.tunnelID ?? preferences.aggregateTunnelID, "runtimeKey": tunnelKey]
+        if server == nil, let profileFile = preferences.aggregateProfileFile { parameters["profileFile"] = profileFile }
+        if command("tunnelAction", params: parameters) {
+            tunnelStates[key] = "请求已提交，等待进程确认"; doctorPassed[key] = false
         }
     }
     func tunnelTargetSignature(key: String) -> String {
         let server = preferences.servers.first { $0.id == key }
         return [preferences.tunnelClientPath, server?.profile ?? preferences.aggregateProfile,
-                server?.tunnelID ?? preferences.aggregateTunnelID, endpoint(server)].joined(separator: "\n")
+                server?.tunnelID ?? preferences.aggregateTunnelID, endpoint(server), server == nil ? preferences.aggregateProfileFile ?? "" : ""].joined(separator: "\n")
     }
     func doctorIsCurrent(key: String) -> Bool { doctorPassed[key] == true && checkedTargets[key] == tunnelTargetSignature(key: key) }
     func tunnelNextStep(key: String) -> String {
@@ -292,8 +267,8 @@ import AppKit
         if initializedTargets[key] == tunnelTargetSignature(key: key) { return "Profile 初始化完成，接下来运行 Doctor；退出码0仍不代表 ChatGPT 调用已验证。" }
         return "自行准备 tunnel ID 与运行密钥，使用唯一 profile 初始化；已有 profile 可直接运行 Doctor 检查。修改目标后需重新检查。"
     }
-    func stopTunnel(_ key: String) { guard tunnelRunning(key) else { return }; healthTasks[key]?.cancel(); healthTasks[key] = nil; tunnelReady[key] = false; tunnels[key]?.stop(); tunnelStates[key] = "正在停止" }
-    func stopAllTunnels() { for key in tunnels.keys where tunnelRunning(key) { stopTunnel(key) } }
+    func stopTunnel(_ key: String) { guard isGatewayRunning else { return }; command("stopTunnel", params: ["key": key]) }
+    func stopAllTunnels() { guard isGatewayRunning else { runningTunnelKeys.removeAll(); return }; command("stopAllTunnels", params: [:]) }
     func exportToolGuide() {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "One-MCP-Tool-Guide.md"

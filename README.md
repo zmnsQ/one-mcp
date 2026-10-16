@@ -87,3 +87,7 @@ Internal Swift package/target names and application-support paths retain `MCPHar
 ## License
 
 A project license has not yet been selected. Publishing the source does not grant an open-source license. The MCP TypeScript SDK and other dependencies retain their own licenses; the tunnel client is installed separately from its official source.
+
+## Command line and AI agents
+
+The native UI now separates Overview, Servers, Tools, Tunnels and Settings. The CLI shares its workspace configuration and gateway; it does not maintain a second server registry. Start with `./bin/onemcp help` after building the gateway. Read the [CLI reference](docs/CLI.md) and install the optional [One MCP agent skill](skills/one-mcp/SKILL.md) in your chosen agent. Configuration mutations preview first and require an explicit revision on apply. Settings can discover existing official tunnel-client paths and profile metadata without copying credentials or executing candidates.

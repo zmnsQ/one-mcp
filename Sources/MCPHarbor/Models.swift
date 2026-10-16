@@ -18,6 +18,7 @@ struct Preferences: Codable, Equatable {
     var port = 8787
     var aggregateTunnelID = ""
     var aggregateProfile = "mcpharbor-aggregate"
+    var aggregateProfileFile: String?
     var mode = "aggregate"
     var servers: [ServerConfig] = []
 }

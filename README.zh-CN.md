@@ -62,3 +62,7 @@ bash scripts/build-macos-app.sh
 网关可在 `gateway/` 下运行 `npm ci --ignore-scripts` 和 `npm test`。原生 Swift 测试需在 Mac 执行；已有网关测试不能代替原生界面或真实隧道验收。Apple workflow 仅手动触发，使用前请核对账户计费。
 
 项目尚未选定许可证。仓库公开不等于自动授予开源许可；第三方依赖沿用各自许可。
+
+## CLI 与 AI 管理
+
+界面按总览、服务器、工具、隧道、设置拆分。CLI 复用相同工作空间和网关，不另建一套配置。构建 gateway 后运行 `./bin/onemcp help`，参阅 [CLI 文档](docs/CLI.md) 与可选 [AI Skill](skills/one-mcp/SKILL.md)。修改先预览，保存需明确配置版本；设置页支持只读发现官方 tunnel-client 与已有 profile 元数据，选择后仍需核对保存。

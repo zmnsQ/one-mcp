@@ -28,3 +28,9 @@ The gateway is for a single user running trusted local programs. Host and Origin
 ## Not implemented
 
 Resources, prompts, roots, sampling, elicitation, remote HTTP upstream management, durable SSE replay, multi-user OAuth and isolation are outside the current proxy scope. Native process cleanup, real tunnel headers and credentials, and actual third-party MCP behavior require testing beyond the provided fixtures.
+
+## Unified operator plane
+
+`onemcp` and SwiftUI use one settings/workspace schema. A shared exclusive directory lease serializes configuration owners. CLI atomic writes require a content revision; GUI detects outside edits and asks to reload. The running gateway is managed over standard input by its owner and an owner-only Unix socket by CLI clients. Both feed one serialized management dispatcher and one tunnel process manager. HTTP MCP clients cannot access these management commands.
+
+The discovery module reads a bounded set of official configuration locations and returns whitelisted metadata. Existing aggregate profiles are referenced by file path; they are never copied or reinitialized. Candidate executable paths do not establish publisher trust or version. The GUI's five navigation sections use the same store rather than independent state copies.
