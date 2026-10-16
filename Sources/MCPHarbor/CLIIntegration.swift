@@ -9,13 +9,15 @@ struct EnvironmentDiscovery: Codable { let clients: [DiscoveredClient]; let prof
 @MainActor extension HarborStore {
     var controlSocketURL: URL { storageRoot.appendingPathComponent("Runtime/control.sock") }
     func acquireConfigurationLease() {
+        // Nested calls within the same main-actor transaction must not mkdir again.
+        if configurationLeaseToken != nil { return }
         do {
             try FileManager.default.createDirectory(at: storageRoot, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let attributes = try FileManager.default.attributesOfItem(atPath: storageRoot.path)
             guard (attributes[.ownerAccountID] as? NSNumber)?.uint32Value == getuid(),
                   ((attributes[.posixPermissions] as? NSNumber)?.intValue ?? 0o777) & 0o077 == 0 else { throw CocoaError(.fileWriteNoPermission) }
             let lock = storageRoot.appendingPathComponent(".configuration-lock")
-            guard mkdir(lock.path, 0o700) == 0 else { throw NSError(domain: "OneMCP", code: 1, userInfo: [NSLocalizedDescriptionKey: "另一进程正在写入配置，请稍后重试。不要删除仍在使用的锁；崩溃残留锁可通过 CLI 检查。"] ) }
+            guard mkdir(lock.path, 0o700) == 0 else { throw NSError(domain: "OneMCP", code: 1, userInfo: [NSLocalizedDescriptionKey: "配置正由另一操作保存，请稍后重试。你的修改已保留。"] ) }
             let token = UUID().uuidString
             do {
                 let data = try JSONSerialization.data(withJSONObject: ["pid": Int(getpid()), "token": token])

@@ -26,6 +26,8 @@ import AppKit
     var savedIndexRevision = "missing"
     var configurationWatchTask: Task<Void, Never>?
     @Published var externalConfigurationNotice: String?
+    var initialConfigurationLoaded = false
+    var initialReadAttempts = 0
     var storageReadable = true
     var redactionValues = Set<String>()
     @Published var preferences = Preferences()
@@ -51,28 +53,17 @@ import AppKit
     var isGatewayRunning: Bool { gateway?.running == true }
     var gatewayReady: Bool { gatewayState == "Ready · loopback only" }
 
-    init() {
-        fileURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    init(configurationFileURL: URL? = nil, startWatcher: Bool = true) {
+        fileURL = configurationFileURL ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MCPHarbor", isDirectory: true).appendingPathComponent("settings.json")
-        acquireConfigurationLease()
-        defer { releaseConfigurationLease() }
-        if FileManager.default.fileExists(atPath: fileURL.path) {
-            do { preferences = try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: fileURL)) }
-            catch { errorMessage = "保存的配置无法读取；已保留原文件。请导入有效配置恢复。"; storageReadable = false }
-        }
-        selectedID = preferences.servers.first?.id
-        bootstrapWorkspaces()
-        let runtimePathsChanged = resolveRuntimePaths()
-        savedPreferences = preferences
-        savedRevision = configurationRevision()
-        if configurationLeaseToken == nil { savedRevision = "unverified"; storageReadable = false }
-        savedIndexRevision = diskRevision(storageRoot.appendingPathComponent("workspaces.json"))
-        if runtimePathsChanged, storageReadable { save() }
-        startConfigurationWatch()
+        // Opening a window is a read operation, never a configuration transaction.
+        loadInitialConfiguration()
+        if startWatcher { startConfigurationWatch() }
         checkSetup()
         // Never restore process state or start services from disk.
     }
     @discardableResult func save() -> Bool {
+        guard initialConfigurationLoaded else { errorMessage = "配置尚未完整载入，未写入任何内容。请先重新载入磁盘版本。"; return false }
         let ownsLease = configurationLeaseToken == nil
         if ownsLease { acquireConfigurationLease() }
         guard configurationLeaseToken != nil else { return false }

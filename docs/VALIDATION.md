@@ -20,3 +20,6 @@
 - ChatGPT工作区权限与一次真实的只读工具调用。
 
 没有取得这些证据前，不宣称“Mac App已测试完成”“生产就绪”或“ChatGPT已连通”。
+
+## Read-only launch hotfix (2026-10-16)
+Opening the app now reads a double-checked configuration/index snapshot without acquiring a writer lease, creating directories, or persisting runtime-path migration. The next explicit save/start uses the existing revision-checked transaction. Initial-read retries are bounded and never overwrite local edits. Existing active/unknown locks are not removed. This fixes the unconditional launch lock alert; it does not diagnose the owner of a user's existing lock from a screenshot. Native execution remains unverified.
