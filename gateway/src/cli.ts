@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs/promises';
+import {diagnoseMCP, compareConfiguration} from './mcp-diagnostics.js';
+import {validateIdentity} from './runtime-client.js';
 import { discoverEnvironment } from './discovery.js';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +11,7 @@ import { controlRequest, privateDirectory } from './control.js';
 import { defaultRoot, workspace, socketPath, safeServer, readJSON, importCandidates, writeConfiguration, runtimeServer, lockInfo, recoverLock, preferencesSchema, secretLike, acquireLease } from './configuration.js';
 const argv = process.argv.slice(2), positional: string[] = [], opts: Record<string, string | boolean> = {};
 const boolean = new Set(['json', 'apply', 'help']);
-const valued = new Set(['home', 'workspace', 'expect-revision', 'file', 'id', 'names', 'field', 'value', 'token']);
+const valued = new Set(['home', 'workspace', 'expect-revision', 'file', 'id', 'names', 'field', 'value', 'token', 'output']);
 let action = 'help';
 function output(result: unknown) { process.stdout.write(JSON.stringify({ schemaVersion: 1, ok: true, action, result }, null, opts.json ? 0 : 2) + '\n'); }
 function failure(message: string, code = 1) { process.stdout.write(JSON.stringify({ schemaVersion: 1, ok: false, action, error: { code, message } }) + '\n'); process.exitCode = code; }
@@ -33,7 +35,7 @@ try {
     action = group + ' ' + verb;
     const root = resolve(String(opts.home ?? defaultRoot()));
     if (group === 'help' || opts.help) {
-        output({ usage: 'onemcp <command> [--json] [--home PATH] [--workspace ID]', commands: ['status', 'environment inspect', 'workspaces', 'servers list|start|stop --id ID', 'tools discover --id ID', 'config validate|init|lock', 'config import --file PATH', 'config allow-tools --id ID --names tool1,tool2', 'config set --field nodePath|gatewayScript|tunnelClientPath|port|aggregateTunnelID|aggregateProfile|mode --value VALUE', 'config recover-lock --token TOKEN', 'gateway run|stop', 'tunnel init|doctor|start|stop --id aggregate|SERVER_ID'], mutation: 'Commands preview unless --apply. Saved configuration changes also require --expect-revision SHA (or missing). Runtime actions use the existing private gateway. Credentials are read from explicit session environment only; no Keychain reads.' });
+        output({ usage: 'onemcp <command> [--json] [--home PATH] [--workspace ID]', commands: ['diagnostics mcp [--output NEW_REPORT.json]', 'status', 'environment inspect', 'workspaces', 'servers list|start|stop --id ID', 'tools discover --id ID', 'config validate|init|lock', 'config import --file PATH', 'config allow-tools --id ID --names tool1,tool2', 'config set --field nodePath|gatewayScript|tunnelClientPath|port|aggregateTunnelID|aggregateProfile|mode --value VALUE', 'config recover-lock --token TOKEN', 'gateway run|stop', 'tunnel init|doctor|start|stop --id aggregate|SERVER_ID'], mutation: 'Commands preview unless --apply. Saved configuration changes also require --expect-revision SHA (or missing). Runtime actions use the existing private gateway. Credentials are read from explicit session environment only; no Keychain reads.' });
     }
     else if (group === 'environment' && verb === 'inspect')
         output(await discoverEnvironment());
@@ -52,7 +54,16 @@ try {
             throw new Error('Read config validate and provide --expect-revision before applying'); return { revision: await writeConfiguration(w, config, opts['expect-revision']), effect: 'saved-only', runtimeChanged: false, message: 'Saved configuration updated. Existing processes remain unchanged; review and explicitly restart affected services to apply.' }; };
         const server = () => { const s = w.config.servers.find(s => s.id === opts.id); if (!s)
             throw new Error('Unknown --id; use servers list'); return s; };
-        if (group === 'status') {
+        if (group === 'diagnostics' && verb === 'mcp') {
+            const identity = validateIdentity(await rpc('status'), await fs.realpath(root), w.id);
+            const report = await diagnoseMCP(`http://127.0.0.1:${identity.port}/mcp`);
+            const snapshot = await rpc('snapshot');
+            validateIdentity(snapshot, await fs.realpath(root), w.id, identity.instanceID);
+            report.savedConfigurationRevision=w.revision;report.comparison=compareConfiguration(w.config,snapshot,report.tools.map((t:{name:string})=>t.name));
+            if(typeof opts.output === 'string') await fs.writeFile(resolve(opts.output), JSON.stringify(report,null,2)+'\n', {flag:'wx',mode:0o600});
+            output(report); if(!report.ok)process.exitCode=1;
+        }
+        else if (group === 'status') {
             let runtime: unknown;
             try {
                 runtime = await live();

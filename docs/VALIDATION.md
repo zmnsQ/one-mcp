@@ -33,3 +33,8 @@ Executed protocol mocks for supported legacy status, wrong workspace/protocol/PI
 
 ## Existing-profile credential resolution (2026-10-16)
 Verified a false-rejection path in OneMCP: all tunnel actions previously required a nonempty session key before invoking the official client. Official configuration documentation supports YAML `control_plane.api_key` file/env/literal resolution; an empty override is now omitted. A mock executable test verifies Doctor and run receive no CONTROL_PLANE_API_KEY variable when omitted, and tests field-specific failures, unavailable profile/executable, existing-profile init refusal, key-required diagnostic classification and secret suppression. This does not establish the exact cause of a user's screenshot or verify real credentials/connectivity. Raw official output is never displayed. Native macOS execution remains unverified.
+
+## MCP/ChatGPT compatibility investigation (2026-10-16)
+Official SDK clients completed initialize/initialized, tools/list and all 37 synthetic iPhone-like calls through both aggregate and individual routes. Fixtures include underscores, dots, hyphens, nested schemas, annotations and image results. This does not call a real phone. The gateway's rejection text for an unknown advertised route differs from the observed outer connector `Unknown tool` error; no alias/transport production fix is claimed without an actual diagnostic report.
+
+Read-only diagnostic fixtures verify zero tool calls, pagination, duplicate names/cursors, malformed schema and 4 MiB failure bounds, local-only targeting and sensitive-value omission. Unix-socket CLI identity checks reuse the existing validator; actual socket/native/public-tunnel integration is not executable in this Linux sandbox.

@@ -57,7 +57,7 @@ struct HarborView: View {
                     }
                 }.listStyle(.sidebar)
                 VStack(alignment: .leading, spacing: 6) {
-                    Label(store.gatewayReady ? "网关已就绪" : "网关未就绪", systemImage: store.gatewayReady ? "checkmark.circle.fill" : "circle")
+                    Label(store.gatewayReady ? "本地网关运行中" : "网关未就绪", systemImage: store.gatewayReady ? "checkmark.circle.fill" : "circle")
                         .font(.caption).foregroundStyle(store.gatewayReady ? Color.green : Color.secondary)
                     Text("仅监听本机 · 工具默认不开放").font(.caption2).foregroundStyle(.secondary)
                 }.padding()
@@ -194,7 +194,7 @@ struct HarborView: View {
             if store.hasUnsavedChanges { Label("有未保存修改", systemImage: "circle.fill").font(.caption).foregroundStyle(.orange) }
             if !store.pendingCommands.isEmpty { Text("等待网关确认：\(store.pendingCommands.count)").font(.caption).foregroundStyle(.secondary) }
             if section != .servers || !store.preferences.servers.isEmpty {
-                Label(store.gatewayReady ? "已就绪" : (store.isGatewayRunning ? "正在启动" : "未运行"), systemImage: "circle.fill")
+                Label(store.gatewayReady ? "本地网关运行中" : (store.isGatewayRunning ? "正在启动" : "未运行"), systemImage: "circle.fill")
                     .font(.caption).foregroundStyle(store.gatewayReady ? Color.green : Color.secondary)
             }
         }.padding(.horizontal, 24).padding(.vertical, 18)
@@ -392,7 +392,7 @@ struct HarborView: View {
             VStack(alignment: .leading, spacing: 22) {
                 GroupBox(store.isAttachedGateway ? "已连接现有网关" : "运行状态") {
                     VStack(alignment: .leading, spacing: 16) {
-                        Label(store.gatewayReady ? "可以使用" : (store.isGatewayRunning ? "正在启动" : (store.runtimeFilesReady ? "已准备好，尚未启动" : "需要检查运行环境")),
+                        Label(store.gatewayReady ? "本地网关运行中，ChatGPT 未验证" : (store.isGatewayRunning ? "正在启动" : (store.runtimeFilesReady ? "已准备好，尚未启动" : "需要检查运行环境")),
                               systemImage: store.gatewayReady ? "checkmark.circle.fill" : "desktopcomputer")
                             .font(.headline).foregroundStyle(store.gatewayReady ? Color.green : Color.primary)
                         Text(store.isAttachedGateway ? "与 AI 共用当前网关。这里的操作会作用于同一实例；退出本应用只断开界面连接。" : (store.gatewayReady ? "返回 MCP 服务，添加或启动你需要的工具。" : store.runtimeSetupSummary))
