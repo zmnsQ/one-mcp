@@ -80,3 +80,9 @@ Existing selected aggregate profiles retain an optional `aggregateProfileFile` r
 The native app resolves its bundled gateway from the currently running app. Saved references to an older One MCP/MCPHarbor app bundle migrate to the current complete bundle under the existing configuration lock. Explicit external gateway paths remain unchanged. Settings → 自动检查并修复 rechecks existing local Node locations and app resources; it does not install software, start a service, create credentials or change tool grants. Detailed paths remain under Advanced settings.
 
 The macOS build checks both source and copied gateway layouts using `scripts/verify-gateway-package.mjs`, including index/CLI entries, package metadata, dependency resolution and a read-only CLI help invocation. Native path-resolution XCTest cases are included, but require macOS to execute in this project.
+
+## Copy an AI management prompt
+
+In the app, open Settings → 让 AI 管理 One MCP → 查看使用说明. The sheet validates the current Node and packaged CLI, shows an inspectable prompt and copies it with explicit success feedback. Use it only with an agent authorized to run commands on this Mac; cloud chat alone cannot reach local files. The prompt begins with four read-only JSON checks and includes shell-quoted paths and the selected workspace. It contains no configured keys, environment values or full profiles.
+
+The app bundles `skills/one-mcp/SKILL.md` and this document as readable references. Copying does not install the Skill, grant access, start programs or approve later changes. When runtime files are missing, copying is unavailable until Settings repair succeeds. Native clipboard and Swift prompt tests require macOS; source checks do not substitute for that validation.

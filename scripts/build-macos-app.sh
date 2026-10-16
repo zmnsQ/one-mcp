@@ -26,6 +26,11 @@ cp -R "$ROOT/gateway/dist" "$ROOT/gateway/node_modules" "$APP/Contents/Resources
 cp "$ROOT/gateway/package.json" "$APP/Contents/Resources/gateway/"
 # Validate the exact packaged layout, including cli.js and transitive package resolution.
 node "$ROOT/scripts/verify-gateway-package.mjs" "$APP/Contents/Resources/gateway"
+mkdir -p "$APP/Contents/Resources/skills/one-mcp" "$APP/Contents/Resources/docs"
+cp "$ROOT/skills/one-mcp/SKILL.md" "$APP/Contents/Resources/skills/one-mcp/SKILL.md"
+cp "$ROOT/docs/CLI.md" "$APP/Contents/Resources/docs/CLI.md"
+test -s "$APP/Contents/Resources/skills/one-mcp/SKILL.md"
+test -s "$APP/Contents/Resources/docs/CLI.md"
 cp "$ROOT/README.md" "$OUT/README.md"
 # Signing is opt-in and uses an identity the user already has. No credentials are created.
 if [[ -n "${CODESIGN_IDENTITY:-}" ]]; then

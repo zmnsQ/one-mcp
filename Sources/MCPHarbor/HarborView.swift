@@ -386,6 +386,7 @@ struct HarborView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
                 }
+                AIManagementAccessView()
                 DisclosureGroup("高级设置与检测详情") {
                     VStack(alignment: .leading, spacing: 18) {
                         Text("通常无需修改。自定义安装位置或排查问题时再展开使用。")

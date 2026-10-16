@@ -5,7 +5,7 @@ description: Inspect and manage the native One MCP workspace, local MCP servers,
 
 # One MCP operator
 
-Use `bin/onemcp` from the checked-out repository, or the user's installed `onemcp` command. Build the gateway first if necessary. Read `docs/CLI.md` for exact commands and limitations.
+Use the exact Node + CLI command supplied by the app’s “让 AI 管理 One MCP” prompt when operating a packaged app; do not assume `onemcp` exists on PATH. The examples below use `onemcp` as shorthand for that command and its explicit `--home` / `--workspace` arguments. Otherwise use `bin/onemcp` from the checked-out repository or a verified installed command. Read the accompanying `docs/CLI.md` for exact commands and limitations. The bundled Skill is a readable reference, not automatically installed in your agent.
 
 1. Start with `onemcp status --json`, `onemcp config validate --json`, and `onemcp servers list --json`. These are read-only. Never substitute another configuration root silently.
 2. For local client/profile discovery, use `onemcp environment inspect --json`. Candidates are metadata, not executable trust or runtime readiness. Never execute a discovered program automatically.
