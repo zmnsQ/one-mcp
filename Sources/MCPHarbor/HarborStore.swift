@@ -21,7 +21,11 @@ import AppKit
     @Published var environmentDiscovery: EnvironmentDiscovery?
     @Published var runningTunnelKeys = Set<String>()
     var configurationLeaseToken: String?
+    var gatewayStartupLeaseToken: String?
     var savedRevision = "missing"
+    var savedIndexRevision = "missing"
+    var configurationWatchTask: Task<Void, Never>?
+    @Published var externalConfigurationNotice: String?
     var storageReadable = true
     var redactionValues = Set<String>()
     @Published var preferences = Preferences()
@@ -51,6 +55,7 @@ import AppKit
         fileURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("MCPHarbor", isDirectory: true).appendingPathComponent("settings.json")
         acquireConfigurationLease()
+        defer { releaseConfigurationLease() }
         if FileManager.default.fileExists(atPath: fileURL.path) {
             do { preferences = try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: fileURL)) }
             catch { errorMessage = "保存的配置无法读取；已保留原文件。请导入有效配置恢复。"; storageReadable = false }
@@ -60,14 +65,19 @@ import AppKit
         let runtimePathsChanged = resolveRuntimePaths()
         savedPreferences = preferences
         savedRevision = configurationRevision()
-        if runtimePathsChanged, configurationLeaseToken != nil, storageReadable { save() }
+        if configurationLeaseToken == nil { savedRevision = "unverified"; storageReadable = false }
+        savedIndexRevision = diskRevision(storageRoot.appendingPathComponent("workspaces.json"))
+        if runtimePathsChanged, storageReadable { save() }
+        startConfigurationWatch()
         checkSetup()
         // Never restore process state or start services from disk.
     }
     @discardableResult func save() -> Bool {
-        guard configurationLeaseToken != nil else { errorMessage = "配置写锁不可用，请重新打开应用。"; return false }
-        guard isGatewayRunning || !FileManager.default.fileExists(atPath: controlSocketURL.path) else { errorMessage = "另一网关正在使用配置，请先停止该网关。"; return false }
-        guard savedRevision == configurationRevision() else { errorMessage = "磁盘配置已变化，请重新打开应用并核对后保存。"; return false }
+        let ownsLease = configurationLeaseToken == nil
+        if ownsLease { acquireConfigurationLease() }
+        guard configurationLeaseToken != nil else { return false }
+        defer { if ownsLease { releaseConfigurationLease() } }
+        guard savedRevision == configurationRevision() else { errorMessage = "AI 或另一窗口已更新配置。当前修改已保留，请先核对外部更新，避免覆盖。"; return false }
         guard storageReadable else { errorMessage = "配置文件损坏，禁止覆盖。请先导入有效配置或创建新工作空间。"; return false }
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -75,9 +85,10 @@ import AppKit
             try FileManager.default.createDirectory(at: workspaceDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try encoder.encode(preferences).write(to: activeConfigurationURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: activeConfigurationURL.path)
-            try persistWorkspaceIndex()
             savedPreferences = preferences
             savedRevision = configurationRevision()
+            externalConfigurationNotice = nil
+            if anyProcessRunning { notice = "配置已保存；运行中的服务不变，需明确重启相关服务后生效。" }
             return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
@@ -107,7 +118,11 @@ import AppKit
         guard !isGatewayRunning else { return }
         resolveRuntimePaths()
         guard runtimeFilesReady else { errorMessage = runtimeSetupSummary; checkSetup(); return }
-        guard save() else { return }
+        acquireConfigurationLease()
+        guard configurationLeaseToken != nil else { return }
+        guard !FileManager.default.fileExists(atPath: controlSocketURL.path) else { releaseConfigurationLease(); errorMessage = "已有网关正在使用此目录。"; return }
+        guard save() else { releaseConfigurationLease(); return }
+        gatewayStartupLeaseToken = configurationLeaseToken
         let process = ManagedProcess()
         process.onLine = { [weak self, weak process] channel, line in
             guard let self, let process, self.gateway === process else { return }
@@ -115,6 +130,7 @@ import AppKit
         }
         process.onExit = { [weak self, weak process] status in
             guard let self, let process, self.gateway === process else { return }
+            self.releaseGatewayStartupLease()
             self.gatewayState = "Stopped (exit \(status))"
             self.clearPendingCommands()
             self.runningTunnelKeys.removeAll()
@@ -126,8 +142,13 @@ import AppKit
             gateway = process; gatewayState = "Starting"
             try FileManager.default.createDirectory(at: controlSocketURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try process.start(executable: preferences.nodePath, arguments: [preferences.gatewayScript, "--port", String(preferences.port), "--workspace-id", currentWorkspaceID, "--control-socket", controlSocketURL.path])
-            save()
-        } catch { gatewayState = "Stopped"; errorMessage = error.localizedDescription }
+            Task { @MainActor [weak self, weak process] in
+                try? await Task.sleep(nanoseconds: 15_000_000_000)
+                guard let self, let process, self.gateway === process, !self.gatewayReady, process.running else { return }
+                self.errorMessage = "网关启动超时，已请求停止。"
+                process.stop() // The exit callback releases the startup lease after the process stops.
+            }
+        } catch { releaseGatewayStartupLease(); gatewayState = "Stopped"; errorMessage = error.localizedDescription }
     }
     func stopGateway() {
         stopAllTunnels()
@@ -162,7 +183,7 @@ import AppKit
                     if event["action"] as? String == "init" { initializedTargets[key] = exitCode == 0 ? signature : nil }
                 }
             }
-        case "ready": gatewayState = "Ready · loopback only"
+        case "ready": gatewayState = "Ready · loopback only"; releaseGatewayStartupLease()
         case "serverStatus": states[id] = event["status"] as? String ?? "unknown"
         case "tools":
             let previous = tools[id]

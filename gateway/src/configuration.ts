@@ -82,7 +82,7 @@ export async function acquireLease(root: string): Promise<() => Promise<void>> {
     }
     catch (e) {
         if ((e as NodeJS.ErrnoException).code === 'EEXIST')
-            throw new Error('Configuration is locked. Close One MCP or wait for the other CLI writer. For a crashed owner, inspect config lock then explicitly recover it.');
+            throw new Error('Configuration write transaction is busy. Retry after the current writer finishes. Never remove a live lock; inspect config lock for a crashed owner.');
         throw e;
     }
     try {
@@ -144,15 +144,7 @@ export async function writeConfiguration(w: Workspace, config: Preferences, expe
         const current = await workspace(w.root, w.id);
         if (current.revision !== expected)
             throw new Error('Configuration changed; read the latest revision and review the diff again');
-        // Never overwrite configuration while any gateway owns this storage root.
-        try {
-            await fs.lstat(socketPath(w.root));
-            throw new Error('Stop the gateway before modifying saved configuration');
-        }
-        catch (e) {
-            if ((e as NodeJS.ErrnoException).code !== 'ENOENT')
-                throw e;
-        }
+        // Saved configuration is a future-launch snapshot. Running processes are never reconfigured here.
         const bytes = JSON.stringify(parsed, null, 2) + '\n';
         const temp = w.path + '.' + randomUUID() + '.tmp';
         const handle = await fs.open(temp, 'wx', 0o600);

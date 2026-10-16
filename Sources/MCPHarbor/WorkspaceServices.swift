@@ -102,18 +102,26 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
     }
     func persistWorkspaceIndex(activeID: String? = nil) throws {
         guard configurationLeaseToken != nil else { throw CocoaError(.fileWriteNoPermission) }
+        try requireCurrentWorkspaceIndex()
         let data = try JSONEncoder().encode(WorkspaceIndex(activeID: activeID ?? currentWorkspaceID, workspaces: workspaces))
         try data.write(to: storageRoot.appendingPathComponent("workspaces.json"), options: .atomic)
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: storageRoot.appendingPathComponent("workspaces.json").path)
+        savedIndexRevision = revision(of: data)
     }
     @discardableResult func createWorkspace(name: String) -> Bool {
         guard !anyProcessRunning else { errorMessage = "请先停止所有进程，再创建或切换工作空间。"; return false }
+        guard !FileManager.default.fileExists(atPath: controlSocketURL.path) else { errorMessage = "请先停止使用此目录的网关，再创建工作空间。"; return false }
+        acquireConfigurationLease()
+        guard configurationLeaseToken != nil else { return false }
+        defer { releaseConfigurationLease() }
+        guard !FileManager.default.fileExists(atPath: controlSocketURL.path) else { errorMessage = "网关已启动，请先停止后再创建工作空间。"; return false }
+        do { try requireCurrentWorkspaceIndex() } catch { errorMessage = error.localizedDescription; return false }
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { return false }
         if storageReadable && !save() { return false }
         if !storageReadable { do { try backupBeforeRecovery() } catch { errorMessage = error.localizedDescription; return false } }
         let oldPreferences = preferences, oldSaved = savedPreferences
-        let oldID = currentWorkspaceID, oldWorkspaces = workspaces, oldReadable = storageReadable
+        let oldID = currentWorkspaceID, oldWorkspaces = workspaces, oldReadable = storageReadable, oldRevision = savedRevision
         let record = WorkspaceRecord(id: UUID().uuidString.lowercased(), name: name)
         workspaces.append(record); currentWorkspaceID = record.id
         preferences.servers = []; preferences.aggregateTunnelID = ""; preferences.aggregateProfileFile = nil
@@ -121,9 +129,14 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         storageReadable = true
         savedRevision = configurationRevision()
         guard save() else {
-            preferences = oldPreferences; savedPreferences = oldSaved; currentWorkspaceID = oldID; savedRevision = configurationRevision()
+            preferences = oldPreferences; savedPreferences = oldSaved; currentWorkspaceID = oldID; savedRevision = oldRevision
             workspaces = oldWorkspaces; storageReadable = oldReadable
             return false
+        }
+        do { try persistWorkspaceIndex() } catch {
+            preferences = oldPreferences; savedPreferences = oldSaved; currentWorkspaceID = oldID; savedRevision = oldRevision
+            workspaces = oldWorkspaces; storageReadable = oldReadable
+            errorMessage = "工作空间索引未保存，新配置文件已保留但未启用：\(error.localizedDescription)"; return false
         }
         clearRuntimeState(); checkSetup()
         notice = "已创建工作空间。"
@@ -133,13 +146,20 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         guard id != currentWorkspaceID else { return }
         guard !anyProcessRunning else { errorMessage = "请先停止所有进程，再切换工作空间。"; return }
         guard workspaces.contains(where: { $0.id == id }) else { return }
+        guard !FileManager.default.fileExists(atPath: controlSocketURL.path) else { errorMessage = "请先停止使用此目录的网关，再切换工作空间。"; return }
+        acquireConfigurationLease()
+        guard configurationLeaseToken != nil else { return }
+        defer { releaseConfigurationLease() }
         let target = id == "default" ? fileURL : workspaceDirectory.appendingPathComponent(id + ".json")
         do {
-            let loaded = try JSONDecoder().decode(Preferences.self, from: Data(contentsOf: target))
+            guard !FileManager.default.fileExists(atPath: controlSocketURL.path) else { errorMessage = "网关已启动，请先停止后再切换工作空间。"; return }
+            try requireCurrentWorkspaceIndex()
             if storageReadable && !save() { return }
+            let data = try Data(contentsOf: target)
+            let loaded = try JSONDecoder().decode(Preferences.self, from: data)
             try validatePreferences(loaded, requireInstalled: false)
             try persistWorkspaceIndex(activeID: id)
-            currentWorkspaceID = id; preferences = loaded; resolveRuntimePaths(); savedPreferences = preferences; storageReadable = true; savedRevision = configurationRevision()
+            currentWorkspaceID = id; preferences = loaded; resolveRuntimePaths(); savedPreferences = preferences; storageReadable = true; savedRevision = revision(of: data)
             clearRuntimeState(); selectedID = preferences.servers.first?.id; checkSetup()
         } catch { errorMessage = "工作空间未切换：\(error.localizedDescription)" }
     }

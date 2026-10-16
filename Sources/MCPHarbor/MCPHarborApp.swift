@@ -3,7 +3,7 @@ import AppKit
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var store: HarborStore?
-    func applicationWillTerminate(_ notification: Notification) { store?.releaseConfigurationLease() }
+    func applicationWillTerminate(_ notification: Notification) { store?.configurationWatchTask?.cancel(); store?.releaseConfigurationLease() }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let store else { return .terminateNow }
         if store.hasUnsavedChanges {

@@ -4,6 +4,7 @@ import { discoverEnvironment } from './discovery.js';
 import { resolve, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import { createInterface } from 'node:readline';
 import { controlRequest, privateDirectory } from './control.js';
 import { defaultRoot, workspace, socketPath, safeServer, readJSON, importCandidates, writeConfiguration, runtimeServer, lockInfo, recoverLock, preferencesSchema, secretLike, acquireLease } from './configuration.js';
 const argv = process.argv.slice(2), positional: string[] = [], opts: Record<string, string | boolean> = {};
@@ -48,7 +49,7 @@ try {
         else
             output(await run()); };
         const save = async (config: typeof w.config) => { if (typeof opts['expect-revision'] !== 'string')
-            throw new Error('Read config validate and provide --expect-revision before applying'); return { revision: await writeConfiguration(w, config, opts['expect-revision']) }; };
+            throw new Error('Read config validate and provide --expect-revision before applying'); return { revision: await writeConfiguration(w, config, opts['expect-revision']), effect: 'saved-only', runtimeChanged: false, message: 'Saved configuration updated. Existing processes remain unchanged; review and explicitly restart affected services to apply.' }; };
         const server = () => { const s = w.config.servers.find(s => s.id === opts.id); if (!s)
             throw new Error('Unknown --id; use servers list'); return s; };
         if (group === 'status') {
@@ -100,19 +101,30 @@ try {
             await mutation({ field, revision: w.revision }, () => save(config));
         }
         else if (group === 'gateway' && verb === 'run')
-            await mutation({ workspace: w.id, port: w.config.port, foreground: true }, async () => { const release = await acquireLease(root); try {
-                const current = await workspace(root, w.id);
-                await privateDirectory(join(root, 'Runtime'));
-                const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'index.js'), '--port', String(current.config.port), '--workspace-id', current.id, '--control-socket', socketPath(root)], { stdio: ['pipe', 'ignore', 'inherit'] });
-                const stop = () => child.stdin.write(JSON.stringify({ id: 'cli-shutdown', method: 'shutdown', params: {} }) + '\n');
-                process.once('SIGINT', stop);
-                process.once('SIGTERM', stop);
-                await new Promise<void>((yes, no) => { child.once('error', no); child.once('exit', code => code === 0 ? yes() : no(new Error('Gateway exited unsuccessfully'))); });
-                return { stopped: true };
-            }
-            finally {
-                await release();
-            } });
+            await mutation({ workspace: w.id, port: w.config.port, foreground: true }, async () => {
+                const release = await acquireLease(root); let released = false;
+                try {
+                    const current = await workspace(root, w.id);
+                    try { await fs.lstat(socketPath(root)); throw new Error('Gateway already owns this workspace root'); }
+                    catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+                    await privateDirectory(join(root, 'Runtime'));
+                    const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'index.js'), '--port', String(current.config.port), '--workspace-id', current.id, '--control-socket', socketPath(root)], { stdio: ['pipe', 'pipe', 'inherit'] });
+                    const exited = new Promise<number | null>(yes => { child.once('error', () => yes(-1)); child.once('exit', yes); });
+                    const lines = createInterface({ input: child.stdout });
+                    const ready = new Promise<void>(yes => lines.on('line', line => { try { if (JSON.parse(line).type === 'ready') yes(); } catch { /* ignore malformed diagnostic */ } }));
+                    const stop = () => { if (!child.stdin.destroyed) child.stdin.write(JSON.stringify({ id: 'cli-shutdown', method: 'shutdown', params: {} }) + '\n'); };
+                    process.once('SIGINT', stop); process.once('SIGTERM', stop);
+                    const timeout = setTimeout(() => child.kill('SIGKILL'), 15000);
+                    try {
+                        await Promise.race([ready, exited.then(() => { throw new Error('Gateway exited before readiness'); })]);
+                        clearTimeout(timeout);
+                        // Socket ownership is now established; the write lease is no longer needed.
+                        await release(); released = true;
+                        if (await exited !== 0) throw new Error('Gateway exited unsuccessfully');
+                        return { stopped: true };
+                    } finally { clearTimeout(timeout); process.removeListener('SIGINT', stop); process.removeListener('SIGTERM', stop); lines.close(); }
+                } finally { if (!released) await release(); }
+            });
         else if (group === 'gateway' && verb === 'stop')
             await mutation({ stopGateway: true }, async () => { await live(); return rpc('shutdown'); });
         else if (group === 'servers' && ['start', 'stop'].includes(verb)) {
@@ -138,5 +150,5 @@ try {
 catch (e) {
     const message = e instanceof Error ? e.message : 'Operation failed';
     const safe = message.includes('Zod') || message.startsWith('[') ? 'Invalid configuration or arguments' : message;
-    failure(safe, /Unknown|missing|required|Invalid|Unsupported/i.test(safe) ? 2 : /lock|changed|workspace|already|Stop the gateway/i.test(safe) ? 3 : 1);
+    failure(safe, /Unknown|missing|required|Invalid|Unsupported/i.test(safe) ? 2 : /lock|busy|changed|workspace|already|Stop the gateway/i.test(safe) ? 3 : 1);
 }

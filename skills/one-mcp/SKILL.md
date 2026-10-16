@@ -10,7 +10,7 @@ Use the exact Node + CLI command supplied by the app’s “让 AI 管理 One MC
 1. Start with `onemcp status --json`, `onemcp config validate --json`, and `onemcp servers list --json`. These are read-only. Never substitute another configuration root silently.
 2. For local client/profile discovery, use `onemcp environment inspect --json`. Candidates are metadata, not executable trust or runtime readiness. Never execute a discovered program automatically.
 3. Preview a requested change without `--apply`. Explain concrete commands, network exposure and tool grants. Follow the assistant platform's permission rules: CLI flags are not human authorization.
-4. Apply only the approved change. Saved changes require the revision from `config validate`; stale revisions or GUI locks require rereading, not force-writing. Close the GUI before CLI configuration edits. Do not weaken file/socket permissions or remove live locks.
+4. Apply only the approved change. Saved changes require the revision from `config validate`; stale revisions require rereading and review, not force-writing. The GUI may stay open: only a short write transaction holds the configuration lease. Retry a busy writer later. Saved edits do not reconfigure existing processes; obtain approval before restarting affected services. The GUI preserves unsaved edits and defers reload while its services run. Do not weaken file/socket permissions or remove live locks.
 5. Verify with status and discovery. A submitted start is not readiness; tunnel readiness is not a verified ChatGPT invocation. On timeout, inspect state before retrying.
 
 ## Security boundaries

@@ -66,6 +66,21 @@ struct HarborView: View {
         } detail: {
             VStack(spacing: 0) {
                 header
+                if let externalNotice = store.externalConfigurationNotice {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.secondary)
+                        Text(externalNotice).font(.caption)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if !store.anyProcessRunning {
+                            Button("载入磁盘版本") {
+                                approve("载入磁盘中最新的配置？这会丢弃当前工作空间尚未保存的本地修改，以磁盘版本替换界面内容。不会启动或重启服务。") {
+                                    store.reloadExternalConfiguration(discardLocalChanges: true)
+                                }
+                            }.help("确认后放弃本地未保存修改，载入已保存的外部配置")
+                        }
+                    }.padding(12).background(Color.accentColor.opacity(0.06))
+                }
                 if let notice = store.notice, section == .settings || !store.preferences.servers.isEmpty {
                     HStack { Image(systemName: "info.circle"); Text(notice).font(.caption); Spacer(); Button("关闭") { store.notice = nil } }.padding(12).background(Color.accentColor.opacity(0.08))
                 }
