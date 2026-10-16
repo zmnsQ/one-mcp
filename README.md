@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/brand/one-mcp-icon.png" width="96" height="96" alt="One MCP logo" /></p>
+
 # One MCP
 
 ### Your local MCP tools. One native Mac workspace.

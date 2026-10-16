@@ -42,12 +42,14 @@ import AppKit
         .commands {
             CommandGroup(after: .saveItem) { Button("Save Configuration") { store.save() }.keyboardShortcut("s") }
         }
-        MenuBarExtra("One MCP", systemImage: "point.3.connected.trianglepath.dotted") {
+        MenuBarExtra {
             Text(store.gatewayState)
             Button("Show One MCP") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
             Divider()
             Button("Stop All Connections") { store.shutdown() }
             Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
+        } label: {
+            Image(nsImage: BrandMark.menuBarImage).accessibilityLabel("One MCP")
         }
     }
 }

@@ -42,7 +42,7 @@ struct HarborView: View {
         NavigationSplitView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack(spacing: 10) {
-                    Image(systemName: "point.3.connected.trianglepath.dotted").font(.title).foregroundStyle(.cyan)
+                    BrandMark().frame(width: 38, height: 38)
                     VStack(alignment: .leading) { Text("One MCP").font(.headline); Text("本机工具，清楚授权。").font(.caption).foregroundStyle(.secondary) }
                 }.padding(.horizontal).padding(.top, 18)
                 HStack {

@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/brand/one-mcp-icon.png" width="96" height="96" alt="One MCP logo" /></p>
+
 # One MCP
 
 ### 把本地 MCP 和隧道，放进一个原生 Mac 工作台。
