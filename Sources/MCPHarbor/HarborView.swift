@@ -164,6 +164,7 @@ struct HarborView: View {
             }.padding(24).frame(width: 480)
         }
         .onChange(of: section) { _, _ in store.notice = nil }
+        .task(id: store.currentWorkspaceID) { store.autofillRememberedTunnelKey() }
         .toolbar {
             if store.hasUnsavedChanges {
                 ToolbarItem {
@@ -331,8 +332,18 @@ struct HarborView: View {
                 GroupBox("官方隧道客户端") {
                     Form {
                         HStack { TextField("tunnel-client 绝对路径", text: $store.preferences.tunnelClientPath); Button("选择") { store.choosePath("tunnel") } }
-                        SecureField("可选：本次会话 Runtime API key", text: $store.tunnelKey)
-                        Text("已有 Profile 的 file: 或内置凭据由官方客户端自行使用，留空不会覆盖。若 Profile 依赖 env:CONTROL_PLANE_API_KEY，请在这里提供本次值。不会自动读取或复制凭据。").font(.caption).foregroundStyle(.secondary)
+                        SecureField("Runtime API Key（已有文件凭据可留空）", text: $store.tunnelKey)
+                        HStack {
+                            Button("保存并自动填入") {
+                                approve("将当前 Runtime API Key 保存到此 Mac 的系统钥匙串，并允许以后打开本工作空间时自动填入？不会写入配置、导出文件或日志。") { store.saveAndRememberTunnelKey() }
+                            }.disabled(store.tunnelKey.isEmpty)
+                            Button("从钥匙串载入") { store.loadRememberedTunnelKey() }
+                            Button("忘记已存密钥", role: .destructive) {
+                                approve("删除本工作空间已保存的 Runtime API Key，并关闭自动填入？当前运行隧道不会停止，服务端密钥不会撤销。") { store.forgetRememberedTunnelKey() }
+                            }
+                        }
+                        Text(store.tunnelCredentialStatus).font(.caption).foregroundStyle(.secondary)
+                        Text("已有 Profile 的 file: 或内置凭据由官方客户端自行使用，留空不会覆盖。若 Profile 依赖 env:CONTROL_PLANE_API_KEY，请在这里提供本次值。不会自动读取或复制 Profile 文件内的凭据。").font(.caption).foregroundStyle(.secondary)
                     }.formStyle(.grouped)
                     Text("需已有 tunnel、Platform Read + Use 权限及正确的 ChatGPT 工作区关联。密钥和隧道由你自行创建。").font(.caption).foregroundStyle(.secondary).padding(10)
                     HStack { Link("安装官方 tunnel-client", destination: URL(string: "https://github.com/openai/tunnel-client#readme")!); Link("Platform 隧道设置", destination: URL(string: "https://platform.openai.com/settings/organization/tunnels")!); Link("官方配置文档", destination: URL(string: "https://developers.openai.com/api/docs/guides/secure-mcp-tunnels")!); Link("ChatGPT Plugins", destination: URL(string: "https://chatgpt.com/plugins")!) }.padding(10)
@@ -458,7 +469,7 @@ struct HarborView: View {
                 }
                 DisclosureGroup("密钥与登录信息") {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("默认仅存在内存。可明确保存到此 Mac 的 Keychain；不会写入配置或导出文件，不会自动读取。").font(.caption).foregroundStyle(.secondary)
+                        Text("默认仅存在内存。可明确保存到此 Mac 的 Keychain；不会写入配置或导出文件。隧道密钥自动填入需在连接页单独启用。").font(.caption).foregroundStyle(.secondary)
                         HStack {
                             Button("保存到系统钥匙串") { approve("将当前工作空间已输入的环境变量值与隧道运行密钥保存到这台 Mac 的 Keychain？仅保存非空值，未来可手动载入。") { store.saveCredentialsToKeychain() } }
                             Button("从系统钥匙串载入") { store.loadCredentialsFromKeychain() }

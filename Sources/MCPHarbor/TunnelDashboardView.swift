@@ -21,6 +21,12 @@ struct TunnelHealthSnapshot {
         var title: String {
             ["control-plane":"OpenAI 控制面连接", "mcp":"MCP 协议观测", "response-delivery":"响应投递", "queue":"本地队列", "dispatcher":"请求处理", "oauth":"OAuth 发现", "cloudflared":"传输进程", "proxy":"代理检查", "harpoon":"目标目录"][id] ?? id
         }
+        var stateDescription: String {
+            if id == "control-plane" && state == "polling" { return "正在等待控制面轮询响应；是否成功以观测状态为准。" }
+            if id == "mcp" && state == "not_observed" { return "尚无协议观测。当前为 HTTP 上游，官方客户端可能无法提供同进程观测证据。" }
+            if id == "oauth" && state == "not_advertised" { return "上游未声明 OAuth 发现；这不代表 Runtime API Key 已验证。" }
+            return state
+        }
         var label: String { ["ok":"正常", "degraded":"需要检查", "unknown":"尚无证据", "disabled":"未启用"][status] ?? "未知" }
     }
     init?(_ value: [String: Any]?) {
@@ -47,7 +53,7 @@ struct TunnelDashboardPanel: View {
                             Circle().fill(component.status == "ok" ? Color.green : component.status == "degraded" ? Color.orange : Color.gray).frame(width: 8, height: 8).padding(.top, 5)
                             VStack(alignment: .leading, spacing: 3) {
                                 Text(component.title)
-                                if !component.state.isEmpty { Text(component.state).font(.caption).foregroundStyle(.secondary) }
+                                if !component.state.isEmpty { Text(component.stateDescription).font(.caption).foregroundStyle(.secondary) }
                                 if !component.observedAt.isEmpty { Text("观测时间：\(component.observedAt)").font(.caption2).foregroundStyle(.secondary) }
                             }
                             Spacer(); Text(component.label).font(.callout)

@@ -14,6 +14,7 @@ import AppKit
     @Published var initializedTargets: [String: String] = [:]
     @Published var checkedTargets: [String: String] = [:]
     @Published var doctorPassed: [String: Bool] = [:]
+    @Published var tunnelCredentialStatus = "仅本次会话使用。"
     @Published var tunnelHealthSnapshots: [String: TunnelHealthSnapshot] = [:]
     @Published var tunnelHealthURLs: [String: URL] = [:]
     var healthTasks: [String: Task<Void, Never>] = [:]

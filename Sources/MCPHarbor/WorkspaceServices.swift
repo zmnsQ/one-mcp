@@ -30,9 +30,10 @@ enum SecretVault {
         }
         guard status == errSecSuccess else { throw vaultError(status) }
     }
-    static func read(account: String) throws -> String? {
-        let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
+    static func read(account: String, allowInteraction: Bool = true) throws -> String? {
+        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
             kSecAttrAccount as String: account, kSecReturnData as String: true, kSecMatchLimit as String: kSecMatchLimitOne]
+        if !allowInteraction { query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUIFail }
         var result: CFTypeRef?
         let status = SecItemCopyMatching(query as CFDictionary, &result)
         if status == errSecItemNotFound { return nil }
@@ -195,7 +196,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         } catch { errorMessage = error.localizedDescription }
     }
     func deleteSavedCredentials() {
-        do { for key in try SecretVault.accounts(prefix: currentWorkspaceID + ":") { try SecretVault.delete(account: key) }; notice = "已删除此工作空间的全部 Keychain 凭据（含已移除服务器引用）。" }
+        do { for key in try SecretVault.accounts(prefix: currentWorkspaceID + ":") { try SecretVault.delete(account: key) }; UserDefaults.standard.removeObject(forKey: TunnelCredentialPolicy.preference(workspace: currentWorkspaceID)); tunnelCredentialStatus = "已关闭自动填入并删除已存密钥。"; notice = "已删除此工作空间的全部 Keychain 凭据（含已移除服务器引用）。" }
         catch { errorMessage = error.localizedDescription }
     }
     func validatePreferences(_ value: Preferences, requireInstalled: Bool = true) throws {
