@@ -37,6 +37,8 @@ struct HarborView: View {
         }
     }
     @State private var section: Section = .overview
+    @State private var showAddMCP = false
+    @State private var importAfterAddDismiss = false
     @State private var showLogs = false
     @State private var toolSearch = ""
     @State private var showWorkspaceSheet = false
@@ -81,16 +83,7 @@ struct HarborView: View {
                 case .tunnels: tunnelSettings
                 case .settings: connectionSettings
                 }
-                Divider()
-                DisclosureGroup(isExpanded: $showLogs) {
-                    logPanel
-                } label: {
-                    HStack {
-                        Label("诊断日志", systemImage: "waveform.path").font(.caption.bold())
-                        Spacer()
-                        Text("\(store.logs.count) 条").font(.caption).foregroundStyle(.secondary)
-                    }
-                }.padding(.horizontal, 16).padding(.vertical, 10)
+
             }
             .background(Color(nsColor: .windowBackgroundColor))
         }
@@ -112,21 +105,63 @@ struct HarborView: View {
         .alert("请留意", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("OK") { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
+        .sheet(isPresented: $showAddMCP, onDismiss: {
+            if importAfterAddDismiss {
+                importAfterAddDismiss = false
+                store.discoverSelectedConfigurations()
+            }
+        }) {
+            VStack(alignment: .leading, spacing: 20) {
+                Text("添加 MCP").font(.title2.bold())
+                Text("选择一种添加方式。导入后可先核对，不会自动运行程序。")
+                    .font(.callout).foregroundStyle(.secondary)
+                Button {
+                    importAfterAddDismiss = true
+                    section = .servers
+                    showAddMCP = false
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("从已有应用导入…", systemImage: "doc.badge.plus").font(.headline)
+                        Text("选择 Claude、Cursor 等应用的 MCP 配置文件，再勾选要添加的项目。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                }.buttonStyle(.bordered).disabled(store.anyProcessRunning)
+                Button {
+                    showAddMCP = false
+                    section = .servers
+                    store.addServer()
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("手动添加", systemImage: "plus").font(.headline)
+                        Text("填写程序路径和启动参数，适合尚未配置的 MCP。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
+                }.buttonStyle(.bordered)
+                if store.anyProcessRunning {
+                    Text("文件导入前请先停止当前连接。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                HStack { Spacer(); Button("取消", role: .cancel) { showAddMCP = false } }
+            }.padding(24).frame(width: 480)
+        }
         .toolbar {
             ToolbarItem {
-                Menu {
-                    Button("从所选配置发现 MCP…") { store.discoverSelectedConfigurations() }.disabled(store.anyProcessRunning)
-                    Divider()
-                    Button("恢复 / 替换整个配置…") { approve("导入将替换当前工作空间的服务器配置，丢弃 env 值并清空工具白名单；不会运行程序。请先保存需要保留的配置。") { store.importConfiguration() } }.disabled(store.anyProcessRunning)
-                    Button("导出配置（不含凭据）") { store.exportConfiguration() }
-                    Button("导出脱敏日志") { store.exportLogs() }
-                } label: { Label("导入与导出", systemImage: "square.and.arrow.up.on.square") }
+                Button { showAddMCP = true } label: { Text("添加 MCP") }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .accessibilityLabel("添加 MCP")
+                    .help("从已有应用的配置文件导入，或手动添加 MCP")
             }
-            ToolbarItem { Button { store.exportToolGuide() } label: { Label("导出工具说明", systemImage: "doc.text") } }
-            ToolbarItem { Button { if store.save() { store.notice = "配置已保存。" } } label: { Label("保存", systemImage: "square.and.arrow.down") } }
-            ToolbarItem { Button { store.shutdown() } label: { Label("全部停止", systemImage: "stop.circle") } }
+            if store.hasUnsavedChanges {
+                ToolbarItem {
+                    Button { if store.save() { store.notice = "配置已保存。" } } label: { Text("保存修改") }
+                        .keyboardShortcut("s", modifiers: .command)
+                        .accessibilityLabel("保存修改")
+                        .help("保存当前工作空间配置，不会自动启动连接")
+                }
+            }
         }
     }
+
     private var header: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 4) {
@@ -257,8 +292,7 @@ struct HarborView: View {
             HStack {
                 serverPicker
                 Spacer()
-                Button("添加 MCP", systemImage: "plus") { store.addServer() }.buttonStyle(.glassProminent)
-                Button("从配置发现…") { store.discoverSelectedConfigurations() }.disabled(store.anyProcessRunning)
+
             }.padding(20)
             Divider()
             if let index = selectedIndex { serverEditor(index: index) }
@@ -268,7 +302,7 @@ struct HarborView: View {
                 } description: {
                     Text("手动配置本机 stdio 程序，或从现有配置中发现。添加不会自动运行程序。")
                 } actions: {
-                    Button("添加 MCP") { store.addServer() }
+                    Button("添加 MCP") { showAddMCP = true }
                 }
             }
         }
@@ -383,8 +417,14 @@ struct HarborView: View {
                     HStack {
                         Text("仅监听 127.0.0.1。启动网关不会自动启动 MCP。").font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Button("启动网关") { approve("确认运行所选 Node 可执行文件与网关脚本，仅监听 127.0.0.1:\(store.preferences.port)?") { store.startGateway() } }.disabled(store.isGatewayRunning).buttonStyle(.glassProminent)
-                        Button("停止") { store.stopGateway() }.disabled(!store.isGatewayRunning)
+                        if store.isGatewayRunning {
+                            Button("停止网关") { store.stopGateway() }
+                                .help("停止本机网关及由它管理的连接")
+                        } else {
+                            Button("启动网关") { approve("确认运行所选 Node 可执行文件与网关脚本，仅监听 127.0.0.1:\(store.preferences.port)?") { store.startGateway() } }
+                                .buttonStyle(.glassProminent)
+                                .help("启动本机网关，不会自动启动 MCP")
+                        }
                     }.padding(10)
                 }
                 GroupBox("凭据保存：由你选择") {
@@ -397,7 +437,31 @@ struct HarborView: View {
                         }
                     }.padding(12)
                 }
-
+                DisclosureGroup("备份与恢复") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("备份保存当前工作空间配置，不包含凭据。恢复会替换当前配置。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button("备份当前配置…") { store.exportConfiguration() }
+                                .help("导出配置文件，不包含凭据")
+                            Button("从备份恢复…", role: .destructive) {
+                                approve("恢复备份将替换当前工作空间的服务器配置，丢弃 env 值并清空工具白名单；不会运行程序。请先备份需要保留的配置。") { store.importConfiguration() }
+                            }.disabled(store.anyProcessRunning)
+                        }
+                    }.padding(.vertical, 10)
+                }
+                DisclosureGroup("诊断与工具说明") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Button("导出工具说明…") { store.exportToolGuide() }
+                            Button("导出脱敏日志…") { store.exportLogs() }
+                        }
+                        DisclosureGroup("查看运行日志（\(store.logs.count) 条）", isExpanded: $showLogs) { logPanel }
+                        Button("停止全部连接", role: .destructive) { store.shutdown() }
+                            .disabled(!store.anyProcessRunning)
+                            .help("停止当前网关、MCP 和隧道进程；保留配置")
+                    }.padding(.vertical, 10)
+                }
             }.padding(24)
         }
     }
