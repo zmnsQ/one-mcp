@@ -17,6 +17,8 @@ r=await request({accept:'application/json'});assert.equal(r.stage,'sdk');assert.
 r=await request({'mcp-protocol-version':'2099-01-01'},'tools/list',{});assert.equal(r.httpStatus,400);assert.equal(r.protocolHeader,'2099-01-01');assert.equal(r.rpcErrorCode,-32000);
 r=await request({'x-onemcp-local-diagnostic':'1'});assert.equal(r.httpStatus,200);assert.equal(r.negotiatedProtocol,'2025-11-25');assert.equal(r.diagnosticMarkerMatched,true);
 r=await request({},'tools/list',{});assert.equal(r.toolCount,0);
+for(const method of ['prompts/list','prompts/get','resources/list','resources/templates/list','resources/read','resources/subscribe','resources/unsubscribe','logging/setLevel','completion/complete','ping']){r=await request({},method,{});assert.equal(r.rpcMethod,method);}
+r=await request({},'private-secret-method',{secret:'private-secret-body'});assert.equal(r.rpcMethod,'other');assert.equal(JSON.stringify(events.filter(e=>e.type==='httpRequest')).includes('private-secret'),false);
 for(let i=0;i<85;i++)await request({'content-type':'text/plain'});
 const beforeHealth=events.filter(e=>e.type==='httpRequest').length;for(let i=0;i<3;i++){const health=await fetch(`http://127.0.0.1:${port}/health`);await health.text();}await new Promise(r=>setTimeout(r,20));assert.equal(events.filter(e=>e.type==='httpRequest').length,beforeHealth);
 child.stdin.write(JSON.stringify({id:'invalid-control',method:'unknown-private-secret'})+'\n');await wait(e=>e.type==='response'&&e.id==='invalid-control');

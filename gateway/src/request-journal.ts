@@ -1,6 +1,6 @@
 import {randomUUID} from 'node:crypto';
 import type {IncomingMessage,ServerResponse} from 'node:http';
-const knownMethods=new Set(['initialize','notifications/initialized','tools/list','tools/call','ping','server/discover']);
+const knownMethods=new Set(['initialize','notifications/initialized','tools/list','tools/call','ping','server/discover','prompts/list','prompts/get','resources/list','resources/templates/list','resources/read','resources/subscribe','resources/unsubscribe','logging/setLevel','completion/complete']);
 const protocol=(v:unknown)=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(v)?v:undefined;
 export type RequestRecord={id:string;time:string;stage:string;route:string;httpMethod:string;hostAccepted:boolean;originPresent:boolean;acceptJSON:boolean;acceptSSE:boolean;diagnosticMarkerMatched:boolean;protocolHeader?:string;rpcMethod?:string;requestedProtocol?:string;negotiatedProtocol?:string;rpcErrorCode?:number;toolCount?:number;httpStatus?:number;completed?:boolean};
 export class RequestJournal {
