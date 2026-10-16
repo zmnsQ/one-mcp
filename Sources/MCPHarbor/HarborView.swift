@@ -6,37 +6,31 @@ struct HarborView: View {
     @State private var pendingAction: (() -> Void)?
     @State private var showConfirmation = false
     private enum Section: String, CaseIterable, Identifiable, Hashable {
-        case overview, servers, tools, tunnels, settings
+        case servers, tunnels, settings
         var id: String { rawValue }
         var title: String {
             switch self {
-            case .overview: "概览"
-            case .servers: "MCP 服务器"
-            case .tools: "工具与授权"
-            case .tunnels: "隧道连接"
+            case .servers: "MCP 服务"
+            case .tunnels: "ChatGPT 连接"
             case .settings: "设置"
             }
         }
         var icon: String {
             switch self {
-            case .overview: "square.grid.2x2"
             case .servers: "shippingbox"
-            case .tools: "wrench.and.screwdriver"
             case .tunnels: "network"
             case .settings: "gearshape"
             }
         }
         var subtitle: String {
             switch self {
-            case .overview: "先启动网关，再连接服务器，最后开放需要的工具。"
-            case .servers: "配置与管理本机 MCP 进程。"
-            case .tools: "查看工具能力，明确哪些工具可以对外调用。"
-            case .tunnels: "将已授权工具连接到 OpenAI 工作区。"
-            case .settings: "本机运行环境、工作空间与凭据。"
+            case .servers: "添加你要使用的工具服务。"
+            case .tunnels: "将允许使用的工具连接到 ChatGPT。"
+            case .settings: "运行环境、凭据与备份。"
             }
         }
     }
-    @State private var section: Section = .overview
+    @State private var section: Section = .servers
     @State private var showAddMCP = false
     @State private var importAfterAddDismiss = false
     @State private var showLogs = false
@@ -72,19 +66,18 @@ struct HarborView: View {
         } detail: {
             VStack(spacing: 0) {
                 header
-                if let notice = store.notice {
+                if let notice = store.notice, section == .settings || !store.preferences.servers.isEmpty {
                     HStack { Image(systemName: "info.circle"); Text(notice).font(.caption); Spacer(); Button("关闭") { store.notice = nil } }.padding(12).background(Color.accentColor.opacity(0.08))
                 }
                 Divider()
                 switch section {
-                case .overview: overview
                 case .servers: serverWorkspace
-                case .tools: toolWorkspace
                 case .tunnels: tunnelSettings
                 case .settings: connectionSettings
                 }
 
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(minWidth: 1020, minHeight: 700)
@@ -144,12 +137,15 @@ struct HarborView: View {
                 HStack { Spacer(); Button("取消", role: .cancel) { showAddMCP = false } }
             }.padding(24).frame(width: 480)
         }
+        .onChange(of: section) { _, _ in store.notice = nil }
         .toolbar {
+            if section != .servers || !store.preferences.servers.isEmpty {
             ToolbarItem {
                 Button { showAddMCP = true } label: { Text("添加 MCP") }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .accessibilityLabel("添加 MCP")
                     .help("从已有应用的配置文件导入，或手动添加 MCP")
+            }
             }
             if store.hasUnsavedChanges {
                 ToolbarItem {
@@ -171,9 +167,12 @@ struct HarborView: View {
             Spacer()
             if store.hasUnsavedChanges { Label("有未保存修改", systemImage: "circle.fill").font(.caption).foregroundStyle(.orange) }
             if !store.pendingCommands.isEmpty { Text("等待网关确认：\(store.pendingCommands.count)").font(.caption).foregroundStyle(.secondary) }
-            HStack(spacing: 8) { Circle().fill(store.gatewayReady ? Color.green : Color.gray).frame(width: 7, height: 7); Text(store.gatewayState).font(.caption) }
-                .padding(.horizontal, 14).padding(.vertical, 10).glassEffect(.regular, in: Capsule())
-        }.padding(24)
+            if section != .servers || !store.preferences.servers.isEmpty {
+                Label(store.gatewayReady ? "已就绪" : (store.isGatewayRunning ? "正在启动" : "未运行"), systemImage: "circle.fill")
+                    .font(.caption).foregroundStyle(store.gatewayReady ? Color.green : Color.secondary)
+            }
+        }.padding(.horizontal, 24).padding(.vertical, 18)
+            .fixedSize(horizontal: false, vertical: true)
     }
     private func approve(_ message: String, action: @escaping () -> Void) {
         confirmation = message; pendingAction = action; showConfirmation = true
@@ -187,7 +186,7 @@ struct HarborView: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 HStack {
-                    VStack(alignment: .leading) { Text(server.name).font(.largeTitle.bold()); Text("STDIO · \(store.states[server.id] ?? "stopped")").font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                    VStack(alignment: .leading) { Text(server.name).font(.largeTitle.bold()); Text(serviceStatus(server.id)).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
                     Spacer()
                     Button("发现工具 / 启动", systemImage: "play.fill") {
                         approve("将在 Mac 上执行 \(server.executable) 及所填参数。MCP 程序具有你账户的文件与服务权限；仅白名单工具可通过网关调用。若选择包管理器，还可能执行下载的程序。确认启动？") { store.startServer(server) }
@@ -223,8 +222,8 @@ struct HarborView: View {
                         }
                     }
                 }
-                Button { section = .tools } label: {
-                    Label("查看工具与授权（已选 \(server.allowedTools.count) 项）", systemImage: "arrow.right.circle")
+                DisclosureGroup("允许使用的工具（已选 \(server.allowedTools.count) 项）") {
+                    toolEditor(index: index).padding(.top, 12)
                 }
                 Button("移除服务器配置", role: .destructive) {
                     approve("停止连接并移除已保存的配置？不会删除 MCP 程序或其文件。") { store.removeServer(server) }
@@ -232,91 +231,58 @@ struct HarborView: View {
             }.padding(24)
         }
     }
-    private var overview: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                HStack(spacing: 16) {
-                    summaryCard("服务器", value: "\(store.preferences.servers.count)", icon: "shippingbox", target: .servers)
-                    summaryCard("已选工具", value: "\(store.preferences.servers.reduce(0) { $0 + $1.allowedTools.count })", icon: "checkmark.shield", target: .tools)
-                    summaryCard("就绪隧道", value: "\(store.tunnelReady.values.filter { $0 }.count)", icon: "network", target: .tunnels)
-                }
-                GroupBox("连接步骤") {
-                    VStack(alignment: .leading, spacing: 20) {
-                        nextStep("1", title: "检查本机运行环境", detail: "选择 Node 和网关脚本，确认后启动本机网关。", action: "打开设置", target: .settings)
-                        Divider()
-                        nextStep("2", title: "添加并发现 MCP 工具", detail: "配置可执行文件及参数，启动服务器后读取工具目录。", action: "管理服务器", target: .servers)
-                        Divider()
-                        nextStep("3", title: "选择允许使用的工具", detail: "停止服务器后编辑白名单；重新启动后生效。", action: "查看授权", target: .tools)
-                        Divider()
-                        nextStep("4", title: "连接隧道", detail: "初始化 profile、检查连接，再接入你的 OpenAI 工作区。", action: "配置隧道", target: .tunnels)
-                    }.padding(16)
-                }
-                Label("网关就绪、隧道就绪与 ChatGPT 实际调用成功是不同状态。", systemImage: "info.circle")
-                    .font(.callout).foregroundStyle(.secondary)
-            }.padding(24)
-        }
-    }
-    private func summaryCard(_ title: String, value: String, icon: String, target: Section) -> some View {
-        Button { section = target } label: {
-            VStack(alignment: .leading, spacing: 12) {
-                Label(title, systemImage: icon).font(.callout).foregroundStyle(.secondary)
-                Text(value).font(.system(size: 32, weight: .semibold, design: .rounded))
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(20)
-                .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
-                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color(nsColor: .separatorColor).opacity(0.5)))
-                .contentShape(RoundedRectangle(cornerRadius: 16))
-        }.buttonStyle(.plain)
-    }
-    private func nextStep(_ number: String, title: String, detail: String, action: String, target: Section) -> some View {
-        HStack(spacing: 16) {
-            Text(number).font(.headline).frame(width: 32, height: 32).background(Color.accentColor.opacity(0.1), in: Circle())
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title).font(.headline)
-                Text(detail).font(.callout).foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button(action) { section = target }
+    private func serviceStatus(_ id: String) -> String {
+        switch store.states[id] ?? "stopped" {
+        case "running": "运行中"
+        case "starting": "正在启动"
+        case "stopping": "正在停止"
+        case "stopped": "未运行"
+        case "failed", "error": "启动失败"
+        default: "需要检查"
         }
     }
     private var serverPicker: some View {
         Picker("服务器", selection: $store.selectedID) {
             Text("请选择服务器").tag(nil as String?)
             ForEach(store.preferences.servers) { server in
-                Text("\(server.name) · \(store.states[server.id] ?? "stopped")").tag(Optional(server.id))
+                Text("\(server.name) · \(serviceStatus(server.id))").tag(Optional(server.id))
             }
         }.frame(maxWidth: 380)
             .onChange(of: store.selectedID) { _, _ in toolSearch = "" }
     }
     private var serverWorkspace: some View {
-        VStack(spacing: 0) {
-            HStack {
-                serverPicker
-                Spacer()
-
-            }.padding(20)
-            Divider()
-            if let index = selectedIndex { serverEditor(index: index) }
-            else {
-                ContentUnavailableView {
-                    Label("添加第一个 MCP", systemImage: "shippingbox")
-                } description: {
-                    Text("手动配置本机 stdio 程序，或从现有配置中发现。添加不会自动运行程序。")
-                } actions: {
-                    Button("添加 MCP") { showAddMCP = true }
-                }
-            }
-        }
-    }
-    private var toolWorkspace: some View {
-        VStack(spacing: 0) {
-            HStack { serverPicker; Spacer(); Button("管理此服务器") { section = .servers } }.padding(20)
-            Divider()
-            if let index = selectedIndex {
-                ScrollView { toolEditor(index: index).padding(24) }
+        Group {
+            if store.preferences.servers.isEmpty {
+                VStack(alignment: .leading, spacing: 14) {
+                    Image(systemName: "shippingbox").font(.system(size: 34)).foregroundStyle(.secondary)
+                    Text("添加你的第一个 MCP").font(.title3.bold())
+                    Text("从现有应用导入，或手动添加。添加后再选择要开放的工具。")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Button("添加 MCP") { showAddMCP = true }.buttonStyle(.glassProminent)
+                        .keyboardShortcut("n", modifiers: [.command, .shift])
+                        .help("从配置文件导入，或手动添加")
+                }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
-                ContentUnavailableView("尚无工具目录", systemImage: "wrench.and.screwdriver", description: Text("先添加并启动 MCP 服务器，再来查看工具和编辑授权。"))
+                HStack(spacing: 0) {
+                    List(selection: $store.selectedID) {
+                        ForEach(store.preferences.servers) { server in
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(server.name).font(.headline)
+                                Text(serviceStatus(server.id)).font(.caption).foregroundStyle(.secondary)
+                            }.padding(.vertical, 6).tag(server.id)
+                        }
+                    }.listStyle(.inset).frame(width: 210)
+                    Divider()
+                    if let index = selectedIndex {
+                        serverEditor(index: index).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    } else {
+                        Text("选择左侧服务，查看配置和工具。")
+                            .foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(24)
+                    }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
+        .onChange(of: store.selectedID) { _, _ in toolSearch = "" }
     }
     private var tunnelSettings: some View {
         ScrollView {
@@ -346,7 +312,7 @@ struct HarborView: View {
                 if store.preferences.mode == "aggregate" {
                     tunnelPanel(server: nil, index: nil)
                 } else {
-                    serverPicker
+                    if !store.preferences.servers.isEmpty { serverPicker }
                     if let index = selectedIndex {
                         tunnelPanel(server: store.preferences.servers[index], index: index)
                     } else {
@@ -373,7 +339,7 @@ struct HarborView: View {
                         Text("先发现工具并停止服务器，再勾选允许对外使用的工具，然后重新启动。配置下次启动时生效。").font(.caption).foregroundStyle(.secondary)
                         if (store.tools[server.id] ?? []).isEmpty { VStack(alignment: .leading, spacing: 8) {
                             Text("尚未发现工具。").foregroundStyle(.secondary)
-                            Button("前往服务器并启动发现") { section = .servers }
+                            Text("使用本页上方的“发现工具 / 启动”读取工具目录。").font(.caption)
                         } }
                         if !toolSearch.isEmpty && !(store.tools[server.id] ?? []).contains(where: { $0.name.localizedCaseInsensitiveContains(toolSearch) || $0.description.localizedCaseInsensitiveContains(toolSearch) }) {
                             Text("没有匹配的工具。试试其他关键词。").font(.callout).foregroundStyle(.secondary)
