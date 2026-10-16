@@ -14,6 +14,7 @@ import AppKit
     @Published var initializedTargets: [String: String] = [:]
     @Published var checkedTargets: [String: String] = [:]
     @Published var doctorPassed: [String: Bool] = [:]
+    @Published var connectionEvents: [ConnectionLogEvent] = []
     @Published var requestTraces: [MCPRequestTrace] = []
     @Published var tunnelCredentialStatus = "仅本次会话使用。"
     @Published var tunnelHealthSnapshots: [String: TunnelHealthSnapshot] = [:]
@@ -142,7 +143,7 @@ import AppKit
             self.gatewayState = "Stopped (exit \(status))"
             self.clearPendingCommands()
             self.runningTunnelKeys.removeAll()
-            self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.requestTraces = []
+            self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.requestTraces = []; self.connectionEvents = []
             for id in Array(self.states.keys) { self.states[id] = "stopped" }
             self.stopAllTunnels()
         }
@@ -185,7 +186,7 @@ import AppKit
             notice = event["message"] as? String
             runtimeBridge?.stop()
             isAttachedGateway = false; gatewayState = "Disconnected"; attachedPort = nil
-            clearPendingCommands(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; requestTraces = []
+            clearPendingCommands(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; requestTraces = []; self.connectionEvents = []
         case "response":
             if let requestID = event["id"] as? String {
                 let context = commandContexts.removeValue(forKey: requestID)
@@ -194,6 +195,10 @@ import AppKit
                 if event["ok"] as? Bool == false, let context, context.method == "startServer", let serverID = context.serverID, states[serverID] == "starting" {
                     states[serverID] = "error"
                 }
+            }
+        case "connectionEvent":
+            if let value = event["entry"] as? [String: Any], let record = ConnectionLogEvent.decode(value) {
+                connectionEvents.append(record); if connectionEvents.count > 200 { connectionEvents.removeFirst(connectionEvents.count - 200) }
             }
         case "httpRequest":
             if let value = event["request"] as? [String: Any], let record = MCPRequestTrace.decode(value) {

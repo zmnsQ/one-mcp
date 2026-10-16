@@ -19,7 +19,9 @@ r=await request({'x-onemcp-local-diagnostic':'1'});assert.equal(r.httpStatus,200
 r=await request({},'tools/list',{});assert.equal(r.toolCount,0);
 for(let i=0;i<85;i++)await request({'content-type':'text/plain'});
 const beforeHealth=events.filter(e=>e.type==='httpRequest').length;for(let i=0;i<3;i++){const health=await fetch(`http://127.0.0.1:${port}/health`);await health.text();}await new Promise(r=>setTimeout(r,20));assert.equal(events.filter(e=>e.type==='httpRequest').length,beforeHealth);
+child.stdin.write(JSON.stringify({id:'invalid-control',method:'unknown-private-secret'})+'\n');await wait(e=>e.type==='response'&&e.id==='invalid-control');
 child.stdin.write(JSON.stringify({id:'snapshot',method:'snapshot'})+'\n');const snapshot=(await wait(e=>e.type==='response'&&e.id==='snapshot')).result;
+assert.ok(snapshot.connectionEvents.some(e=>e.code==='GATEWAY_READY'));assert.ok(snapshot.connectionEvents.some(e=>e.code==='CONTROL_OPERATION_FAILED'));assert.equal(JSON.stringify(snapshot.connectionEvents).includes('private-secret'),false);
 assert.equal(snapshot.requests.length,80);assert.equal(JSON.stringify(snapshot.requests).includes('private-secret'),false);
 console.log('PASS actual HTTP journal: Origin/Accept/protocol rejection, negotiated protocol, list count, diagnostic marker, 80-entry bound, no raw values');
 }finally{child.stdin.write(JSON.stringify({id:'shutdown',method:'shutdown'})+'\n');await wait(e=>e.type==='response'&&e.id==='shutdown').catch(()=>{});if(child.exitCode===null)child.kill('SIGTERM');}

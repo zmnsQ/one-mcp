@@ -1,3 +1,4 @@
+import {ConnectionJournal} from './connection-events.js';
 import { RequestJournal } from './request-journal.js';
 /** Original MCP Harbor gateway. Loopback-only; real macOS/tunnel integration requires user acceptance. */
 import http, { IncomingMessage, ServerResponse } from 'node:http';
@@ -30,7 +31,13 @@ const port = portIndex >= 0 ? Number(process.argv[portIndex + 1]) : 8787;
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid loopback port');
 const recentEvents: Array<{sequence:number; event:object}> = [];
 let eventSequence = 0;
+const connectionJournal = new ConnectionJournal();
+const publishConnectionEvent = (event: object) => {
+  const entry = connectionJournal.record(event);
+  if (entry) process.stdout.write(JSON.stringify({type:"connectionEvent", entry}) + "\n");
+};
 const emit = (event: object) => {
+  if ((event as {type?:string}).type !== "response") publishConnectionEvent(event);
   const type = (event as {type?:string}).type;
   if (type !== 'response' && type !== 'tools') {
     recentEvents.push({sequence: ++eventSequence, event});
@@ -50,7 +57,7 @@ const controlRoot = controlIndex >= 0 ? realpathSync(dirname(dirname(process.arg
 let closeControl: (() => Promise<void>) | undefined;
 let chain = Promise.resolve();
 function dispatch(command: ControlRequest): Promise<ControlResponse> {
-  const operation = chain.then(() => perform(command));
+  const operation = chain.then(() => perform(command)).then(result => { publishConnectionEvent(result); return result; });
   chain = operation.then(() => undefined, () => undefined);
   return operation;
 }
@@ -336,7 +343,7 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
     switch (command.method) {
       case 'status': case 'snapshot': result = { protocolVersion: 1, instanceID, controlRoot, pid: process.pid, port, workspaceID,
         servers: [...managed.values()].map(m => ({ id: m.config.id, name: m.config.name, running: m.ready, allowedTools: m.config.allowedTools, toolCount: m.tools.length, ...(command.method === 'snapshot' ? {tools: m.tools.map(t => ({...t, publicName: publicName(m.config.id,t.name)}))} : {}) })),
-        ...(command.method === 'snapshot' ? {events: recentEvents, sequence: eventSequence, requests: requestJournal.snapshot()} : {}),
+        ...(command.method === 'snapshot' ? {events: recentEvents, sequence: eventSequence, requests: requestJournal.snapshot(), connectionEvents: connectionJournal.snapshot()} : {}),
         tunnels: tunnelManager.snapshot() }; break;
       case 'startServer': await start(command.params?.server); break;
       case 'stopServer': { const id = requireID(); await tunnelManager.stopAll(); await stop(id); break; }
