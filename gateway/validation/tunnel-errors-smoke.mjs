@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
-import {TunnelManager,profileLocationEnvironment} from '../dist/tunnels.js';
+import {TunnelManager,profileLocationEnvironment,profileSelection} from '../dist/tunnels.js';
 import {safeTunnelError,classifyTunnelDiagnostic} from '../dist/tunnel-errors.js';
 assert.deepEqual(profileLocationEnvironment({TUNNEL_CLIENT_PROFILE_DIR:'/profiles',XDG_CONFIG_HOME:'/config',CONTROL_PLANE_API_KEY:'SECRET',OPENAI_API_KEY:'SECRET'}),{TUNNEL_CLIENT_PROFILE_DIR:'/profiles',XDG_CONFIG_HOME:'/config'});
 assert.deepEqual(profileLocationEnvironment({TUNNEL_CLIENT_PROFILE_DIR:'relative',XDG_CONFIG_HOME:'bad\0'}),{});
@@ -18,6 +18,16 @@ try{
  for(let i=0;i<100&&!events.some(e=>e.exitCode===0);i++)await new Promise(r=>setTimeout(r,10));
  assert.ok(events.some(e=>e.action==='doctor'&&e.exitCode===0));
  await manager.action({...target,action:'run'});assert.equal(manager.snapshot().at(-1).running,true);await manager.stopAll();
+ for (const blank of ['', '   ']) {
+  const before=events.length;await manager.action({...target,profileFile:blank});
+  for(let i=0;i<100&&!events.slice(before).some(e=>e.exitCode===0);i++)await new Promise(r=>setTimeout(r,10));
+  assert.ok(events.slice(before).some(e=>e.exitCode===0));assert.ok(events.slice(before).some(e=>e.type==='tunnelProfile'&&e.profileMode==='named'));
+ }
+ assert.deepEqual(profileSelection('example',undefined,{HOME:'/users/test',XDG_CONFIG_HOME:'/xdg',TUNNEL_CLIENT_PROFILE_DIR:'/profiles'}),{profileMode:'named',profileLocation:'/profiles/example.yaml',profileLocationSource:'TUNNEL_CLIENT_PROFILE_DIR'});
+ assert.equal(profileSelection('example',undefined,{HOME:'/users/test',XDG_CONFIG_HOME:'/xdg'}).profileLocation,'/xdg/tunnel-client/example.yaml');
+ assert.equal(profileSelection('example',undefined,{HOME:'/users/test'}).profileLocation,'/users/test/.config/tunnel-client/example.yaml');
+ assert.equal(classifyTunnelDiagnostic('profile config not found'),'TUNNEL_PROFILE_LOOKUP');
+ console.log('PASS empty optional profile-file uses named profile; official profile lookup precedence and error origin separation');
  await fails({tunnelID:''},'TUNNEL_ID');await fails({profileFile:undefined,profile:'bad/name'},'TUNNEL_PROFILE');
  await fails({executable:'/missing/client'},'TUNNEL_EXECUTABLE');await fails({profileFile:'/missing/profile'},'TUNNEL_PROFILE_FILE');
  await fails({runtimeKey:'bad\0'},'TUNNEL_KEY_FORMAT');await fails({key:'backend'},'TUNNEL_BACKEND');await fails({action:'init'},'TUNNEL_EXISTING_INIT');

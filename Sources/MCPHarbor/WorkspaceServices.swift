@@ -238,7 +238,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
     func choosePath(_ key: String) {
         let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        switch key { case "node": preferences.nodePath = url.path; case "gateway": preferences.gatewayScript = url.path; default: preferences.tunnelClientPath = url.path }
+        switch key { case "node": preferences.nodePath = url.path; case "gateway": preferences.gatewayScript = url.path; case "profile": preferences.aggregateProfileFile = url.path; default: preferences.tunnelClientPath = url.path }
         checkSetup()
     }
     func importConfiguration() {

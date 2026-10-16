@@ -20,6 +20,10 @@ try {
  for(let i=0;i<100;i++){try{if((await fs.readFile(capture,'utf8')).includes('--profile-file'))break;}catch{}await new Promise(r=>setTimeout(r,20));}
  assert.ok((await fs.readFile(capture,'utf8')).includes('--profile-file\n'+path.join(dir,'foo.prod.yaml')));
  await manager.stopAll();
+ await fs.writeFile(capture,'');
+ await manager.action({...target,executable:fileFixture,profileFile:''});
+ for(let i=0;i<100;i++){try{if((await fs.readFile(capture,'utf8')).includes('--profile'))break;}catch{}await new Promise(r=>setTimeout(r,20));}
+ const namedArgs=await fs.readFile(capture,'utf8');assert.ok(namedArgs.includes('--profile\n'+target.profile));assert.equal(namedArgs.includes('--profile-file'),false);await manager.stopAll();
  await assert.rejects(manager.action({...target,key:'backend',action:'run'}));
  await assert.rejects(manager.action({...target,action:'init',profileFile:'/tmp/existing-profile.yaml'}));
  await manager.action({...target,action:'run'});await assert.rejects(manager.action({...target,action:'run'}));

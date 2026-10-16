@@ -30,6 +30,12 @@ export function profileLocationEnvironment(source:NodeJS.ProcessEnv):Record<stri
     }
     return result;
 }
+export function profileSelection(profile:string,file:string|undefined,source:NodeJS.ProcessEnv) {
+ if(file)return {profileMode:'file',profileLocation:file,profileLocationSource:'explicit-file'};
+ const locations=profileLocationEnvironment(source);
+ const directory=locations.TUNNEL_CLIENT_PROFILE_DIR ?? (locations.XDG_CONFIG_HOME?join(locations.XDG_CONFIG_HOME,'tunnel-client'):source.HOME&&isAbsolute(source.HOME)?join(source.HOME,'.config','tunnel-client'):undefined);
+ return {profileMode:'named',profileLocation:directory?join(directory,profile+'.yaml'):undefined,profileLocationSource:locations.TUNNEL_CLIENT_PROFILE_DIR?'TUNNEL_CLIENT_PROFILE_DIR':locations.XDG_CONFIG_HOME?'XDG_CONFIG_HOME':'HOME default'};
+}
 export class TunnelManager {
     private running = new Map<string, Running>();
     private results = new Map<string, object>();
@@ -41,7 +47,8 @@ export class TunnelManager {
         this.emit(event);
     }
     async action(raw: unknown): Promise<unknown> {
-        const t = raw as Target;
+        const input = raw as Target;
+        const t = input && typeof input === 'object' ? {...input, profileFile: typeof input.profileFile === 'string' && !input.profileFile.trim() ? undefined : input.profileFile} : input;
         if (!t || typeof t.key !== 'string' || !/^[\w-]{1,64}$/.test(t.key) || !['init','doctor','run'].includes(t.action)) throw new TunnelActionError('TUNNEL_TARGET');
         if (typeof t.profile !== 'string' || t.profile.length > 256 || (!t.profileFile && !/^[\w-]{1,64}$/.test(t.profile))) throw new TunnelActionError('TUNNEL_PROFILE');
         if (typeof t.tunnelID !== 'string' || !/^tunnel_[\w-]+$/.test(t.tunnelID)) throw new TunnelActionError('TUNNEL_ID');
@@ -49,6 +56,7 @@ export class TunnelManager {
         try { await fs.access(t.executable, constants.X_OK); } catch { throw new TunnelActionError('TUNNEL_EXECUTABLE'); }
         if (t.runtimeKey !== undefined && (typeof t.runtimeKey !== 'string' || t.runtimeKey.length > 65536 || t.runtimeKey.includes('\0'))) throw new TunnelActionError('TUNNEL_KEY_FORMAT');
         if (t.profileFile !== undefined && (typeof t.profileFile !== 'string' || !isAbsolute(t.profileFile) || t.profileFile.includes('\0'))) throw new TunnelActionError('TUNNEL_PROFILE_FILE');
+        this.emit({type:'tunnelProfile',key:t.key,...profileSelection(t.profile,t.profileFile,process.env)});
         if (t.profileFile && t.action === 'init') throw new TunnelActionError('TUNNEL_EXISTING_INIT');
         if (t.profileFile) { try { if (!(await fs.stat(t.profileFile)).isFile()) throw new Error(); await fs.access(t.profileFile, constants.R_OK); } catch { throw new TunnelActionError('TUNNEL_PROFILE_FILE'); } }
         if (t.key !== 'aggregate' && t.action !== 'init' && !this.serverReady(t.key)) throw new TunnelActionError('TUNNEL_BACKEND');
@@ -84,7 +92,7 @@ export class TunnelManager {
                 this.running.delete(t.key);
             const failure = code === 0 ? undefined : (diagnostic ?? 'TUNNEL_FAILED');
             diagnosticTail = '';
-            this.event(t.key, { ...(failure ? {errorCode: failure, message: tunnelErrors[failure]} : {}), running: false, ready: false, action: t.action, exitCode: code, signature,
+            this.event(t.key, { ...(failure ? {errorOrigin:'official-client', errorCode: failure, message: tunnelErrors[failure]} : {}), running: false, ready: false, action: t.action, exitCode: code, signature,
                 state: t.action === 'run' ? `Stopped (${code ?? 'signal'})` : `${t.action} ${code === 0 ? 'passed' : 'failed'}` });
             if (folder)
                 void fs.rm(folder, { recursive: true, force: true });

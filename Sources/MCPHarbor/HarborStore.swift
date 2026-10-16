@@ -40,6 +40,7 @@ import AppKit
     @Published var gatewayState = "Stopped"
     @Published var states: [String: String] = [:]
     var shownTunnelFailures: [String: String] = [:]
+    @Published var tunnelProfileLocations: [String: String] = [:]
     @Published var tunnelStates: [String: String] = [:]
     @Published var tools: [String: [ToolInfo]] = [:]
     @Published var logs: [LogLine] = []
@@ -191,6 +192,8 @@ import AppKit
                     states[serverID] = "error"
                 }
             }
+        case "tunnelProfile":
+            if let key = event["key"] as? String, let path = event["profileLocation"] as? String { tunnelProfileLocations[key] = path }
         case "tunnelStatus":
             if let key = event["key"] as? String {
                 if event["running"] as? Bool == true { runningTunnelKeys.insert(key) } else { runningTunnelKeys.remove(key) }
@@ -289,7 +292,7 @@ import AppKit
         redactionValues.insert(tunnelKey)
         var parameters: [String: Any] = ["key": key, "action": action, "executable": preferences.tunnelClientPath,
             "profile": server?.profile ?? preferences.aggregateProfile, "tunnelID": server?.tunnelID ?? preferences.aggregateTunnelID, "runtimeKey": tunnelKey]
-        if server == nil, let profileFile = preferences.aggregateProfileFile { parameters["profileFile"] = profileFile }
+        if server == nil, let profileFile = preferences.aggregateProfileFile, !profileFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { parameters["profileFile"] = profileFile }
         if command("tunnelAction", params: parameters) {
             tunnelStates[key] = "请求已提交，等待进程确认"; doctorPassed[key] = false
         }
@@ -297,7 +300,7 @@ import AppKit
     func tunnelTargetSignature(key: String) -> String {
         let server = preferences.servers.first { $0.id == key }
         return [preferences.tunnelClientPath, server?.profile ?? preferences.aggregateProfile,
-                server?.tunnelID ?? preferences.aggregateTunnelID, endpoint(server), server == nil ? preferences.aggregateProfileFile ?? "" : ""].joined(separator: "\n")
+                server?.tunnelID ?? preferences.aggregateTunnelID, endpoint(server), server == nil ? ((preferences.aggregateProfileFile?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? preferences.aggregateProfileFile! : "") : ""].joined(separator: "\n")
     }
     func doctorIsCurrent(key: String) -> Bool { doctorPassed[key] == true && checkedTargets[key] == tunnelTargetSignature(key: key) }
     func tunnelNextStep(key: String) -> String {

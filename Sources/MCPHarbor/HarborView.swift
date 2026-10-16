@@ -510,6 +510,16 @@ struct HarborView: View {
                     TextField("Tunnel ID", text: $store.preferences.aggregateTunnelID).disabled(store.tunnelRunning(key))
                     TextField("唯一的本机 profile 名称", text: $store.preferences.aggregateProfile).disabled(store.tunnelRunning(key))
                 }
+                if server == nil {
+                    if let file = store.preferences.aggregateProfileFile, !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("使用已有文件：\(file)").font(.caption).textSelection(.enabled)
+                        Button("改用上方命名 Profile") { store.preferences.aggregateProfileFile = nil; store.tunnelProfileLocations[key] = nil }.disabled(store.tunnelRunning(key))
+                    }
+                    Button("选择已有 Profile 文件…") { store.choosePath("profile") }.disabled(store.tunnelRunning(key))
+                }
+                if let location = store.tunnelProfileLocations[key] {
+                    Text("预计查找位置（按最近请求配置）：\(location)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                }
                 Text("下一步：\(store.tunnelNextStep(key: key))").font(.caption).foregroundStyle(.secondary)
                 Text(store.endpoint(server)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
                 HStack { Circle().fill(store.tunnelReady[key] == true ? Color.green : Color.gray).frame(width: 8, height: 8); Text(store.tunnelStates[key] ?? "未运行").font(.caption).foregroundStyle(.secondary) }
