@@ -28,8 +28,16 @@ try{
  console.log('PASS import discards credentials, denies tools, rejects secret arguments');
  if(process.env.ONEMCP_SKIP_SOCKET_TEST==='1'){console.log('SKIP Unix-socket integration: explicitly disabled by sandbox test runner');} else {
  gateway=spawn(process.execPath,[cli,'gateway','run','--apply','--home',home],{stdio:['ignore','pipe','pipe']});
- const socket=path.join(home,'Runtime','control.sock');let status;
- for(let n=0;n<100;n++){try{status=await controlRequest(socket,'status');break;}catch{await new Promise(r=>setTimeout(r,50));}}
+ const socket=path.join(home,'Runtime','control.sock');let status,lastError,spawnError;
+ let diagnostics='';
+ const capture=chunk=>{diagnostics=(diagnostics+chunk.toString()).slice(-4096);};
+ gateway.stdout.on('data',capture);gateway.stderr.on('data',capture);
+ gateway.on('error',error=>{spawnError=error;});
+ for(let n=0;n<100;n++){
+  if(spawnError||gateway.exitCode!==null||gateway.signalCode!==null)break;
+  try{status=await controlRequest(socket,'status');break;}catch(error){lastError=error;await new Promise(r=>setTimeout(r,50));}
+ }
+ assert.ok(status,`Gateway IPC startup failed (exit=${gateway.exitCode}, signal=${gateway.signalCode}): ${spawnError?.message||lastError?.message||'no status response'}. Child output: ${diagnostics.trim()}. If this runner forbids Unix sockets, explicitly set ONEMCP_SKIP_SOCKET_TEST=1 and report IPC as unverified.`);
  assert.equal(status.workspaceID,'default');assert.equal((await fs.stat(socket)).mode&0o777,0o600);
  assert.equal(run('status').result.runtime.workspaceID,'default');
  assert.equal(run('gateway','stop').result.preview,true);
