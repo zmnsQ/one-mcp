@@ -47,10 +47,16 @@ import AppKit
     @Published var runtimeValues: [String: String] = [:]
     @Published var tunnelKey = ""
     var gateway: ManagedProcess?
+    var runtimeBridge: ManagedProcess?
+    @Published var isAttachedGateway = false
+    @Published var sharedRuntimeServers: [SharedServerSummary] = []
+    var attachedPort: Int?
+    var sharedEventSequence = 0
+    var sharedConnectionAttempted = false
     var tunnels: [String: ManagedProcess] = [:]
     private var tunnelTargets: [String: (profile: String, tunnelID: String)] = [:]
     let fileURL: URL
-    var isGatewayRunning: Bool { gateway?.running == true }
+    var isGatewayRunning: Bool { gateway?.running == true || isAttachedGateway }
     var gatewayReady: Bool { gatewayState == "Ready · loopback only" }
 
     init(configurationFileURL: URL? = nil, startWatcher: Bool = true) {
@@ -60,6 +66,7 @@ import AppKit
         loadInitialConfiguration()
         if startWatcher { startConfigurationWatch() }
         checkSetup()
+        attachExistingGatewayIfPresent()
         // Never restore process state or start services from disk.
     }
     @discardableResult func save() -> Bool {
@@ -107,11 +114,12 @@ import AppKit
     }
     func startGateway() {
         guard !isGatewayRunning else { return }
+        if FileManager.default.fileExists(atPath: controlSocketURL.path) { attachExistingGatewayIfPresent(force: true); return }
         resolveRuntimePaths()
         guard runtimeFilesReady else { errorMessage = runtimeSetupSummary; checkSetup(); return }
         acquireConfigurationLease()
         guard configurationLeaseToken != nil else { return }
-        guard !FileManager.default.fileExists(atPath: controlSocketURL.path) else { releaseConfigurationLease(); errorMessage = "已有网关正在使用此目录。"; return }
+        guard !FileManager.default.fileExists(atPath: controlSocketURL.path) else { releaseConfigurationLease(); attachExistingGatewayIfPresent(force: true); return }
         guard save() else { releaseConfigurationLease(); return }
         gatewayStartupLeaseToken = configurationLeaseToken
         let process = ManagedProcess()
@@ -142,6 +150,9 @@ import AppKit
         } catch { releaseGatewayStartupLease(); gatewayState = "Stopped"; errorMessage = error.localizedDescription }
     }
     func stopGateway() {
+        if isAttachedGateway {
+            command("shutdown", params: [:]); gatewayState = "Stopping"; return
+        }
         stopAllTunnels()
         guard let process = gateway else { return }
         try? process.send(["id": UUID().uuidString, "method": "shutdown", "params": [:]])
@@ -151,10 +162,17 @@ import AppKit
             process.stop()
         }
     }
-    private func consumeEvent(_ line: String) {
+    func consumeEvent(_ line: String) {
         guard let data = line.data(using: .utf8), let event = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { log("gateway", line); return }
         let id = event["serverId"] as? String ?? "gateway"
         switch event["type"] as? String {
+        case "sharedSnapshot":
+            if let snapshot = event["snapshot"] as? [String: Any] { applySharedSnapshot(snapshot) }
+        case "sharedDisconnected":
+            notice = event["message"] as? String
+            runtimeBridge?.stop()
+            isAttachedGateway = false; gatewayState = "Disconnected"; attachedPort = nil
+            clearPendingCommands(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]
         case "response":
             if let requestID = event["id"] as? String {
                 let context = commandContexts.removeValue(forKey: requestID)
@@ -208,7 +226,8 @@ import AppKit
         let configID = (params["server"] as? [String: Any])?["id"] as? String
         let serverID = (params["serverId"] as? String) ?? configID
         do {
-            try gateway?.send(["id": id, "method": method, "params": params])
+            guard let transport = isAttachedGateway ? runtimeBridge : gateway else { return false }
+            try transport.send(["id": id, "method": method, "params": params])
             pendingCommands[id] = method
             commandContexts[id] = (method, serverID)
             commandTimeouts[id] = Task { @MainActor [weak self] in
@@ -245,7 +264,7 @@ import AppKit
         command("stopServer", params: ["serverId": server.id])
     }
     func endpoint(_ server: ServerConfig?) -> String {
-        "http://127.0.0.1:\(preferences.port)" + (server.map { "/servers/\($0.id)/mcp" } ?? "/mcp")
+        "http://127.0.0.1:\(attachedPort ?? preferences.port)" + (server.map { "/servers/\($0.id)/mcp" } ?? "/mcp")
     }
     func tunnelRunning(_ key: String) -> Bool { runningTunnelKeys.contains(key) }
     func tunnelAction(_ action: String, server: ServerConfig?) {

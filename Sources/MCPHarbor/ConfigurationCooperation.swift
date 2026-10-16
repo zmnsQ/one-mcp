@@ -69,6 +69,7 @@ enum ConfigurationReloadDecision: Equatable {
             while !Task.isCancelled {
                 do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
                 self?.reloadExternalConfiguration()
+                self?.attachExistingGatewayIfPresent()
             }
         }
     }

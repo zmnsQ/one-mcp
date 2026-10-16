@@ -87,7 +87,7 @@ import Darwin
             buffers[channel]?.removeSubrange(...index)
             onLine?(channel, line)
         }
-        if (buffers[channel]?.count ?? 0) > 128_000 { buffers[channel] = Data(); onLine?(channel, "[Oversized output line dropped]") }
+        if (buffers[channel]?.count ?? 0) > 4_194_304 { buffers[channel] = Data(); onLine?(channel, "[Oversized output line dropped]") }
     }
     func send(_ object: [String: Any]) throws {
         guard running, let input else { throw NSError(domain: "MCPHarbor", code: 3, userInfo: [NSLocalizedDescriptionKey: "Gateway is not running"]) }

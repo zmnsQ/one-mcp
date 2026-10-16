@@ -378,19 +378,35 @@ struct HarborView: View {
     private var connectionSettings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                GroupBox("运行状态") {
+                GroupBox(store.isAttachedGateway ? "已连接现有网关" : "运行状态") {
                     VStack(alignment: .leading, spacing: 16) {
                         Label(store.gatewayReady ? "可以使用" : (store.isGatewayRunning ? "正在启动" : (store.runtimeFilesReady ? "已准备好，尚未启动" : "需要检查运行环境")),
                               systemImage: store.gatewayReady ? "checkmark.circle.fill" : "desktopcomputer")
                             .font(.headline).foregroundStyle(store.gatewayReady ? Color.green : Color.primary)
-                        Text(store.gatewayReady ? "返回 MCP 服务，添加或启动你需要的工具。" : store.runtimeSetupSummary)
+                        Text(store.isAttachedGateway ? "与 AI 共用当前网关。这里的操作会作用于同一实例；退出本应用只断开界面连接。" : (store.gatewayReady ? "返回 MCP 服务，添加或启动你需要的工具。" : store.runtimeSetupSummary))
                             .font(.callout).foregroundStyle(.secondary)
+                        if store.isAttachedGateway {
+                            ForEach(store.sharedRuntimeServers) { server in
+                                HStack {
+                                    VStack(alignment: .leading) {
+                                        Text(server.name).font(.subheadline)
+                                        Text("当前实例：\(server.running ? "运行中" : "已停止") · 已授权 \(server.allowedTools.count) 个工具").font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Button("停止此服务") {
+                                        approve("停止共享实例中的 \(server.name)？使用此服务的 AI 和应用都会受到影响。") {
+                                            store.command("stopServer", params: ["serverId": server.id])
+                                        }
+                                    }.disabled(!server.running)
+                                }
+                            }
+                        }
                         HStack(spacing: 12) {
                             Button(store.discoveryBusy ? "正在检测…" : "自动检查并修复") { store.repairEnvironment() }
                                 .disabled(store.anyProcessRunning || store.discoveryBusy)
                                 .help("检查已安装组件并修正失效路径；不会安装软件或启动服务")
                             if store.isGatewayRunning {
-                                Button("停止服务") { store.stopGateway() }
+                                Button("停止服务") { approve("停止此共享网关及其连接？所有连接到该实例的 AI 和应用都会受到影响。") { store.stopGateway() } }
                             } else {
                                 Button("启动服务") {
                                     approve("确认运行所选 Node 可执行文件与网关脚本，仅监听 127.0.0.1:\(store.preferences.port)?") { store.startGateway() }
@@ -463,7 +479,7 @@ struct HarborView: View {
                             Button("导出脱敏日志…") { store.exportLogs() }
                         }
                         DisclosureGroup("查看运行日志（\(store.logs.count) 条）", isExpanded: $showLogs) { logPanel }
-                        Button("停止全部连接", role: .destructive) { store.shutdown() }
+                        Button("停止全部连接", role: .destructive) { approve("停止共享网关及全部连接？所有连接到此实例的客户端都会受到影响。") { store.shutdown() } }
                             .disabled(!store.anyProcessRunning)
                             .help("停止当前网关、MCP 和隧道进程；保留配置")
                     }.padding(.vertical, 10)

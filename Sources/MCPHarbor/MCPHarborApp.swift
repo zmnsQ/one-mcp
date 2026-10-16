@@ -3,7 +3,7 @@ import AppKit
 
 @MainActor final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var store: HarborStore?
-    func applicationWillTerminate(_ notification: Notification) { store?.configurationWatchTask?.cancel(); store?.releaseConfigurationLease() }
+    func applicationWillTerminate(_ notification: Notification) { store?.configurationWatchTask?.cancel(); store?.releaseConfigurationLease(); store?.detachSharedGateway() }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let store else { return .terminateNow }
         if store.hasUnsavedChanges {
@@ -17,6 +17,7 @@ import AppKit
             if result == .alertSecondButtonReturn { return .terminateCancel }
             if result == .alertFirstButtonReturn && !store.save() { return .terminateCancel }
         }
+        if store.isAttachedGateway { store.detachSharedGateway(); return .terminateNow }
         guard store.anyProcessRunning else { return .terminateNow }
         store.shutdown()
         Task { @MainActor in
@@ -46,7 +47,12 @@ import AppKit
             Text(store.gatewayState)
             Button("Show One MCP") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
             Divider()
-            Button("Stop All Connections") { store.shutdown() }
+            Button("Stop All Connections") {
+                let alert = NSAlert(); alert.messageText = "停止共享网关及全部连接？"
+                alert.informativeText = "所有连接到此实例的 AI 和应用都会受到影响。"
+                alert.addButton(withTitle: "停止"); alert.addButton(withTitle: "取消")
+                if alert.runModal() == .alertFirstButtonReturn { store.shutdown() }
+            }
             Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
         } label: {
             Image(nsImage: BrandMark.menuBarImage).accessibilityLabel("One MCP")

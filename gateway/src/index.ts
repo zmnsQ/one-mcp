@@ -1,7 +1,8 @@
 /** Original MCP Harbor gateway. Loopback-only; real macOS/tunnel integration requires user acceptance. */
 import http, { IncomingMessage, ServerResponse } from 'node:http';
-import { createHash } from 'node:crypto';
-import { isAbsolute } from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
+import { realpathSync } from 'node:fs';
+import { isAbsolute, dirname } from 'node:path';
 import { createInterface } from 'node:readline';
 import { parseRequest, serveControl, ControlRequest, ControlResponse } from './control.js';
 import { TunnelManager } from './tunnels.js';
@@ -25,13 +26,24 @@ let inflight = 0;
 const portIndex = process.argv.indexOf('--port');
 const port = portIndex >= 0 ? Number(process.argv[portIndex + 1]) : 8787;
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid loopback port');
-const emit = (event: object) => process.stdout.write(JSON.stringify(event) + '\n');
+const recentEvents: Array<{sequence:number; event:object}> = [];
+let eventSequence = 0;
+const emit = (event: object) => {
+  const type = (event as {type?:string}).type;
+  if (type !== 'response' && type !== 'tools') {
+    recentEvents.push({sequence: ++eventSequence, event});
+    if (recentEvents.length > 100) recentEvents.shift();
+  }
+  process.stdout.write(JSON.stringify(event) + '\n');
+};
 const MAX_BODY = 1024 * 1024;
 const MAX_REQUESTS = 32;
 const tunnelManager = new TunnelManager(port, emit, id => managed.get(id)?.ready === true);
 const controlIndex = process.argv.indexOf('--control-socket');
 const workspaceIndex = process.argv.indexOf('--workspace-id');
 const workspaceID = workspaceIndex >= 0 ? process.argv[workspaceIndex + 1] : 'default';
+const instanceID = randomUUID();
+const controlRoot = controlIndex >= 0 ? realpathSync(dirname(dirname(process.argv[controlIndex + 1] ?? ''))) : null;
 let closeControl: (() => Promise<void>) | undefined;
 let chain = Promise.resolve();
 function dispatch(command: ControlRequest): Promise<ControlResponse> {
@@ -298,6 +310,7 @@ lines.on('line', line => {
 async function perform(command: ControlRequest): Promise<ControlResponse> {
   try {
     if (closing) throw new Error('Gateway is shutting down');
+    if (command.params?.expectedInstanceID !== undefined && command.params.expectedInstanceID !== instanceID) throw new Error('Gateway instance changed; reconnect before issuing commands');
     let result: unknown = null;
     const rawID = command.params?.serverId;
     const requireID = () => {
@@ -305,8 +318,9 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
       return rawID;
     };
     switch (command.method) {
-      case 'status': result = { pid: process.pid, port, workspaceID,
-        servers: [...managed.values()].map(m => ({ id: m.config.id, name: m.config.name, running: m.ready, allowedTools: m.config.allowedTools, toolCount: m.tools.length })),
+      case 'status': case 'snapshot': result = { protocolVersion: 1, instanceID, controlRoot, pid: process.pid, port, workspaceID,
+        servers: [...managed.values()].map(m => ({ id: m.config.id, name: m.config.name, running: m.ready, allowedTools: m.config.allowedTools, toolCount: m.tools.length, ...(command.method === 'snapshot' ? {tools: m.tools.map(t => ({...t, publicName: publicName(m.config.id,t.name)}))} : {}) })),
+        ...(command.method === 'snapshot' ? {events: recentEvents, sequence: eventSequence} : {}),
         tunnels: tunnelManager.snapshot() }; break;
       case 'startServer': await start(command.params?.server); break;
       case 'stopServer': { const id = requireID(); await tunnelManager.stopAll(); await stop(id); break; }

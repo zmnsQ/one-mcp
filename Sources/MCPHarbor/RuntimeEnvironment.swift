@@ -10,7 +10,7 @@ enum RuntimeEnvironment {
         guard script.hasPrefix("/") else { return ["gateway/dist/index.js"] }
         let dist = URL(fileURLWithPath: script).deletingLastPathComponent()
         let root = dist.deletingLastPathComponent()
-        let files = [script, dist.appendingPathComponent("cli.js").path,
+        let files = [dist.appendingPathComponent("runtime-bridge.js").path, script, dist.appendingPathComponent("cli.js").path,
                      root.appendingPathComponent("package.json").path,
                      root.appendingPathComponent("node_modules/@modelcontextprotocol/sdk/package.json").path,
                      root.appendingPathComponent("node_modules/zod/package.json").path]
