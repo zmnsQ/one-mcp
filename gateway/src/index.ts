@@ -1,3 +1,4 @@
+import { RequestJournal } from './request-journal.js';
 /** Original MCP Harbor gateway. Loopback-only; real macOS/tunnel integration requires user acceptance. */
 import http, { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
@@ -37,6 +38,7 @@ const emit = (event: object) => {
   }
   process.stdout.write(JSON.stringify(event) + '\n');
 };
+const requestJournal = new RequestJournal(emit);
 const MAX_BODY = 1024 * 1024;
 const MAX_REQUESTS = 32;
 const tunnelManager = new TunnelManager(port, emit, id => managed.get(id)?.ready === true);
@@ -235,31 +237,43 @@ const httpServer = http.createServer((req, res) => {
   void handleHttp(req, res).catch(() => { if (!res.headersSent) json(res, 500, { error: 'MCP request failed' }); else res.destroy(); });
 });
 async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const trace = requestJournal.begin(req, res, allowedHost(req));
+  trace.stage("lifecycle");
   if (closing) return json(res, 503, { error: 'Shutting down' });
+  trace.stage("host");
   if (!allowedHost(req)) return json(res, 403, { error: 'Only local Host headers accepted' });
   // Reject even an empty Origin header. Never expose an unauthenticated browser endpoint.
+  trace.stage("origin");
   if (req.headers.origin !== undefined) return json(res, 403, { error: 'Browser Origin requests are not allowed' });
+  trace.stage("path");
   let path: string;
   try {
     if (!req.url?.startsWith('/') || req.url.startsWith('//')) throw new Error('Invalid path');
     path = new URL(req.url, 'http://127.0.0.1').pathname;
   } catch { return json(res, 400, { error: 'Invalid request target' }); }
-  if (path === '/health' && req.method === 'GET') return json(res, 200, { status: 'ready', managedServers: [...managed.values()].filter(m => m.ready).length });
+  if (path === '/health' && req.method === 'GET') { trace.ignore(); return json(res, 200, { status: 'ready', managedServers: [...managed.values()].filter(m => m.ready).length }); }
   const individual = /^\/servers\/([A-Za-z0-9_-]{1,64})\/mcp$/.exec(path);
   if (path !== '/mcp' && !individual) return json(res, 404, { error: 'Unknown endpoint' });
+  trace.route(!!individual);
   const serverId = individual?.[1];
   if (serverId && !managed.get(serverId)?.ready) return json(res, 404, { error: 'Server is not running' });
+  trace.stage('method');
   if (req.method !== 'POST') { res.setHeader('Allow', 'POST'); return json(res, 405, { error: 'Stateless Streamable HTTP accepts POST only; no SSE resumability' }); }
+  trace.stage('content-type');
   if (req.headers['content-type']?.split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') return json(res, 415, { error: 'Use application/json' });
+  trace.stage('body-size');
   if (Number(req.headers['content-length'] ?? 0) > MAX_BODY) return json(res, 413, { error: 'JSON body exceeds limit' });
+  trace.stage('capacity');
   if (inflight >= MAX_REQUESTS) return json(res, 429, { error: 'Busy' });
   inflight++;
   res.once('close', () => { inflight--; });
+  trace.stage('body');
   let payload: unknown;
   try { payload = await body(req); }
   catch (error) { return json(res, error instanceof BodyError ? error.status : 400, { error: 'Invalid or oversized JSON' }); }
   if (res.destroyed || closing) return;
   if (Array.isArray(payload)) return json(res, 400, { error: 'JSON-RPC batches are not supported' });
+  trace.payload(payload); trace.stage('sdk');
   const bridge = new Server({ name: 'mcp-harbor', version: '0.1.0' }, { capabilities: { tools: {} } });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   activeRequests.add(bridge);
@@ -268,6 +282,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
     const results = await Promise.allSettled(sources.map(m => discover(m)));
     // One unhealthy process must not hide tools from every other managed server.
     if (serverId && results.some(result => result.status === 'rejected')) throw new Error('Upstream tool discovery failed');
+    trace.tools(catalogue(serverId).length);
     return { tools: catalogue(serverId).map(({ name, tool, managed: m }) => ({ ...tool, name,
       description: `[${m.config.name}] ${tool.description ?? ''}` })) };
   });
@@ -321,7 +336,7 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
     switch (command.method) {
       case 'status': case 'snapshot': result = { protocolVersion: 1, instanceID, controlRoot, pid: process.pid, port, workspaceID,
         servers: [...managed.values()].map(m => ({ id: m.config.id, name: m.config.name, running: m.ready, allowedTools: m.config.allowedTools, toolCount: m.tools.length, ...(command.method === 'snapshot' ? {tools: m.tools.map(t => ({...t, publicName: publicName(m.config.id,t.name)}))} : {}) })),
-        ...(command.method === 'snapshot' ? {events: recentEvents, sequence: eventSequence} : {}),
+        ...(command.method === 'snapshot' ? {events: recentEvents, sequence: eventSequence, requests: requestJournal.snapshot()} : {}),
         tunnels: tunnelManager.snapshot() }; break;
       case 'startServer': await start(command.params?.server); break;
       case 'stopServer': { const id = requireID(); await tunnelManager.stopAll(); await stop(id); break; }

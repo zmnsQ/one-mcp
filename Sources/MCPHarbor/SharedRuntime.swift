@@ -23,7 +23,7 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
             self.runtimeBridge = nil; self.isAttachedGateway = false; self.attachedPort = nil
             let wasDisconnected = self.gatewayState == "Disconnected"
             self.gatewayState = "Disconnected"; self.clearPendingCommands()
-            self.sharedRuntimeServers = []; self.states = [:]; self.tools = [:]; self.runningTunnelKeys = []; self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]
+            self.sharedRuntimeServers = []; self.states = [:]; self.tools = [:]; self.runningTunnelKeys = []; self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.requestTraces = []
             if !wasDisconnected { self.notice = "共享网关连接已结束。可点击启动服务重新连接，不会自动重发操作。" }
         }
         do {
@@ -42,6 +42,7 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
             guard let id = item["id"] as? String else { return nil }
             return SharedServerSummary(id: id, name: item["name"] as? String ?? id, running: item["running"] as? Bool ?? false, allowedTools: item["allowedTools"] as? [String] ?? [])
         }
+        requestTraces = (snapshot["requests"] as? [[String: Any]] ?? []).suffix(80).compactMap { MCPRequestTrace.decode($0) }
         states = [:]; tools = [:]
         for server in servers {
             guard let id = server["id"] as? String else { continue }

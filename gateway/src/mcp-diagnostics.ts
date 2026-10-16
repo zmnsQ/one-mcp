@@ -18,7 +18,8 @@ export async function diagnoseMCP(endpoint:string) {
  const client=new Client({name:'onemcp-readonly-diagnostic',version:'1'},{capabilities:{}});
  const transport=new StreamableHTTPClientTransport(url,{fetch:async(input,init)=>{
   let method='unknown';try{method=JSON.parse(typeof init?.body==='string'?init.body:'{}').method??'GET';}catch{}
-  const response=await fetch(input,{...init,redirect:'error',signal:AbortSignal.any([deadline,...(init?.signal?[init.signal]:[]),AbortSignal.timeout(15000)])});
+  const headers=new Headers(init?.headers);headers.set('x-onemcp-local-diagnostic','1');
+  const response=await fetch(input,{...init,headers,redirect:'error',signal:AbortSignal.any([deadline,...(init?.signal?[init.signal]:[]),AbortSignal.timeout(15000)])});
   report.http.push({method,status:response.status,contentType:response.headers.get('content-type')?.split(';')[0]?.slice(0,80),hasSessionID:response.headers.has('mcp-session-id')});
   if(response.headers.get('content-type')?.includes('text/event-stream')){await response.body?.cancel();throw Error('Diagnostic JSON-only scope');}
   const reader=response.body?.getReader();let size=0;const chunks:Uint8Array[]=[];

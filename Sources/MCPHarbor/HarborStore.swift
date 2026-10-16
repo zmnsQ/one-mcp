@@ -14,6 +14,7 @@ import AppKit
     @Published var initializedTargets: [String: String] = [:]
     @Published var checkedTargets: [String: String] = [:]
     @Published var doctorPassed: [String: Bool] = [:]
+    @Published var requestTraces: [MCPRequestTrace] = []
     @Published var tunnelCredentialStatus = "仅本次会话使用。"
     @Published var tunnelHealthSnapshots: [String: TunnelHealthSnapshot] = [:]
     @Published var tunnelHealthURLs: [String: URL] = [:]
@@ -141,7 +142,7 @@ import AppKit
             self.gatewayState = "Stopped (exit \(status))"
             self.clearPendingCommands()
             self.runningTunnelKeys.removeAll()
-            self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]
+            self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.requestTraces = []
             for id in Array(self.states.keys) { self.states[id] = "stopped" }
             self.stopAllTunnels()
         }
@@ -184,7 +185,7 @@ import AppKit
             notice = event["message"] as? String
             runtimeBridge?.stop()
             isAttachedGateway = false; gatewayState = "Disconnected"; attachedPort = nil
-            clearPendingCommands(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]
+            clearPendingCommands(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; requestTraces = []
         case "response":
             if let requestID = event["id"] as? String {
                 let context = commandContexts.removeValue(forKey: requestID)
@@ -193,6 +194,10 @@ import AppKit
                 if event["ok"] as? Bool == false, let context, context.method == "startServer", let serverID = context.serverID, states[serverID] == "starting" {
                     states[serverID] = "error"
                 }
+            }
+        case "httpRequest":
+            if let value = event["request"] as? [String: Any], let record = MCPRequestTrace.decode(value) {
+                requestTraces.append(record); if requestTraces.count > 80 { requestTraces.removeFirst(requestTraces.count - 80) }
             }
         case "tunnelProfile":
             if let key = event["key"] as? String, let path = event["profileLocation"] as? String { tunnelProfileLocations[key] = path }

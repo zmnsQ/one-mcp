@@ -318,6 +318,7 @@ struct HarborView: View {
     private var tunnelSettings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
+                MCPRequestTracePanel().environmentObject(store)
                 GroupBox("出口方式") {
                     Picker("路由模式", selection: $store.preferences.mode) {
                         Text("聚合 · 一个隧道").tag("aggregate")

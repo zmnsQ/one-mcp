@@ -165,7 +165,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         } catch { errorMessage = "工作空间未切换：\(error.localizedDescription)" }
     }
     func clearRuntimeState() {
-        healthTasks.values.forEach { $0.cancel() }; healthTasks = [:]; tunnelHealthURLs = [:]
+        healthTasks.values.forEach { $0.cancel() }; healthTasks = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; requestTraces = []
         clearPendingCommands(); gateway = nil; tunnels = [:]; gatewayState = "Stopped"
         runtimeValues = [:]; tunnelKey = ""; redactionValues = []; tools = [:]; states = [:]; tunnelStates = [:]
         logs = []; notice = nil; toolChanges = [:]; selectedID = nil; doctorPassed = [:]; tunnelReady = [:]; initializedTargets = [:]; checkedTargets = [:]
