@@ -1,0 +1,55 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+import {prepareRuntimeSocket} from '../dist/runtime-start.js';
+import {sharedDisconnectReason} from '../dist/runtime-client.js';
+assert.equal(sharedDisconnectReason(Object.assign(Error('/private/path'),{code:'ECONNREFUSED'})),'socket-unavailable');
+assert.equal(sharedDisconnectReason(Error('Management timed out')),'timeout');
+assert.equal(sharedDisconnectReason(Error('Management response exceeds limit')),'snapshot-too-large');
+assert.equal(sharedDisconnectReason(Error('Shared gateway identity/workspace changed')),'identity-mismatch');
+assert.equal(sharedDisconnectReason(Error('token=secret')),'connection-lost');
+import {serveControl,controlRequest} from '../dist/control.js';
+// Fault-injected guards are runnable even where the host forbids Unix socket binding.
+let moved=[];
+const stable={stat:async()=>({dev:1,ino:2}),check:async()=>{},reachable:async()=>false,preserve:async p=>{moved.push(p);}};
+assert.equal(await prepareRuntimeSocket('/private/control.sock',stable),'available');
+assert.equal(moved.length,1);assert.match(moved[0],/control\.sock\.stale-/);
+moved=[];
+assert.equal(await prepareRuntimeSocket('/private/control.sock',{...stable,reachable:async()=>true}),'existing');assert.equal(moved.length,0);
+await assert.rejects(prepareRuntimeSocket('/private/control.sock',{...stable,check:async()=>{throw Error('Unsafe');}}),/Unsafe/);assert.equal(moved.length,0);
+await assert.rejects(prepareRuntimeSocket('/private/control.sock',{...stable,reachable:async()=>{throw Error('timeout');}}),/timeout/);assert.equal(moved.length,0);
+let calls=0;
+await assert.rejects(prepareRuntimeSocket('/private/control.sock',{...stable,stat:async()=>({dev:1,ino:++calls})}),/changed/);assert.equal(moved.length,0);
+assert.equal(await prepareRuntimeSocket('/private/control.sock',{...stable,stat:async()=>{throw Object.assign(Error('absent'),{code:'ENOENT'});}}),'available');assert.equal(moved.length,0);
+const native=await fs.readFile('../Sources/MCPHarbor/HarborStore.swift','utf8');
+const startup=native.slice(native.indexOf('    func startGateway()'),native.indexOf('    private func launchGatewayWithStartupLease()'));
+assert.ok(startup.indexOf('gateway = nil') < startup.indexOf('acquireConfigurationLease()'));
+assert.match(startup,/guard !self.gatewayStartCancelled/);
+assert.match(startup,/5_000_000_000/);
+console.log('PASS native startup cancellation, timeout and stale-owner source invariants (not native execution)');
+console.log('PASS startup decision guards: absent/refused/live/unsafe/timeout/replaced socket (injected I/O)');
+if(process.argv.includes('--pure') || process.env.ONEMCP_SKIP_SOCKET_TEST==='1'){console.log('SKIP Unix socket integration explicitly requested');process.exit(0);}
+const root=await fs.mkdtemp(path.join(os.tmpdir(),'omcp-start-'));
+const socket=path.join(root,'control.sock');let child,close;
+try {
+ assert.equal(await prepareRuntimeSocket(socket),'available');
+ await fs.writeFile(socket,'not a socket');
+ await assert.rejects(prepareRuntimeSocket(socket),/Unsafe/);
+ assert.equal(await fs.readFile(socket,'utf8'),'not a socket');await fs.unlink(socket);
+ const target=path.join(root,'keep');await fs.writeFile(target,'keep');await fs.symlink(target,socket);
+ await assert.rejects(prepareRuntimeSocket(socket),/Unsafe/);assert.equal(await fs.readFile(target,'utf8'),'keep');await fs.unlink(socket);
+ close=await serveControl(socket,async c=>({type:'response',id:c.id,ok:true,result:{alive:true}}));
+ const live=await fs.lstat(socket);
+ assert.equal(await prepareRuntimeSocket(socket),'existing');assert.equal((await fs.lstat(socket)).ino,live.ino);
+ assert.deepEqual(await controlRequest(socket,'status'),{alive:true});await close();close=undefined;
+ child=spawn(process.execPath,['--input-type=module','-e',`import net from 'node:net'; import fs from 'node:fs'; net.createServer().listen(${JSON.stringify(socket)},()=>{fs.chmodSync(${JSON.stringify(socket)},0o600);console.log('ready')});`],{stdio:['ignore','pipe','inherit']});
+ await once(child.stdout,'data');const dead=await fs.lstat(socket);child.kill('SIGKILL');await once(child,'exit');
+ assert.equal(await prepareRuntimeSocket(socket),'available');await assert.rejects(fs.lstat(socket),{code:'ENOENT'});
+ const kept=(await fs.readdir(root)).find(x=>x.startsWith('control.sock.stale-'));assert.ok(kept);assert.equal((await fs.lstat(path.join(root,kept))).ino,dead.ino);
+ close=await serveControl(socket,async c=>({type:'response',id:c.id,ok:true,result:{restarted:true}}));
+ assert.deepEqual(await controlRequest(socket,'status'),{restarted:true});
+ console.log('PASS explicit startup preserves refused dead socket, restarts; live socket/file/symlink remain untouched (real Unix sockets)');
+}finally{await close?.();if(child?.exitCode===null&&child?.signalCode===null)child.kill('SIGKILL');await fs.rm(root,{recursive:true,force:true});}

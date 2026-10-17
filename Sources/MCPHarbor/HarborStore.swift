@@ -54,6 +54,9 @@ import AppKit
     @Published var tunnelKey = ""
     var gateway: ManagedProcess?
     var runtimeBridge: ManagedProcess?
+    var startupPreparation: ManagedProcess?
+    var gatewayStartCancelled = false
+    @Published var gatewayStartBusy = false
     var takeoverProcess: ManagedProcess?
     @Published var takeoverBusy = false
     @Published var legacyCandidateJSON: String?
@@ -122,16 +125,66 @@ import AppKit
         if logs.count > 1000 { logs.removeFirst(logs.count - 1000) }
     }
     func startGateway() {
-        guard !takeoverBusy else { return }
-        guard !isGatewayRunning else { return }
-        if FileManager.default.fileExists(atPath: controlSocketURL.path) { attachExistingGatewayIfPresent(force: true); return }
+        guard !takeoverBusy, !gatewayStartBusy, !isGatewayRunning else { return }
+        // Retire an exited owner before acquiring a new lease. Its delayed pipe-drain
+        // callback must not clear the new startup state or release the new lease.
+        gateway = nil
+        releaseGatewayStartupLease()
+        clearPendingCommands()
+        detachSharedGateway() // Discard only a failed adapter, never stop the shared gateway.
+        sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []
+        tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]
+        requestTraces = []; connectionEvents = []
         resolveRuntimePaths()
         guard runtimeFilesReady else { errorMessage = runtimeSetupSummary; checkSetup(); return }
         acquireConfigurationLease()
         guard configurationLeaseToken != nil else { return }
-        guard !FileManager.default.fileExists(atPath: controlSocketURL.path) else { releaseConfigurationLease(); attachExistingGatewayIfPresent(force: true); return }
-        guard save() else { releaseConfigurationLease(); return }
+        // Save only when actually launching; attaching to a live instance remains read-only.
         gatewayStartupLeaseToken = configurationLeaseToken
+        let workspace = currentWorkspaceID, config = preferences, revision = savedRevision
+        let process = ManagedProcess()
+        startupPreparation = process; gatewayStartCancelled = false; gatewayStartBusy = true; gatewayState = "Checking"
+        notice = nil; errorMessage = nil
+        var preparedState: String?
+        process.onLine = { [weak self, weak process] channel, line in
+            guard let self, let process, self.startupPreparation === process else { return }
+            guard channel == "stdout", let data = line.data(using: .utf8),
+                  let event = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { self.log("gateway start", line); return }
+            if event["type"] as? String == "runtimeStartPrepared" { preparedState = event["state"] as? String }
+            if event["type"] as? String == "runtimeStartFailed" { self.errorMessage = event["message"] as? String }
+        }
+        process.onExit = { [weak self, weak process] status in
+            guard let self, let process, self.startupPreparation === process else { return }
+            self.startupPreparation = nil; self.gatewayStartBusy = false
+            guard !self.gatewayStartCancelled, status == 0, let preparedState,
+                  self.currentWorkspaceID == workspace, self.preferences == config,
+                  self.configurationRevision() == revision else {
+                self.releaseGatewayStartupLease(); self.gatewayState = "Disconnected"
+                if self.errorMessage == nil { self.errorMessage = "启动检查未完成或配置已改变，请检查后重试。" }
+                return
+            }
+            if preparedState == "existing" {
+                self.releaseGatewayStartupLease(); self.attachExistingGatewayIfPresent(force: true); return
+            }
+            guard preparedState == "available", self.save() else { self.releaseGatewayStartupLease(); self.gatewayState = "Disconnected"; return }
+            self.launchGatewayWithStartupLease()
+        }
+        do {
+            let script = URL(fileURLWithPath: preferences.gatewayScript).deletingLastPathComponent().appendingPathComponent("runtime-start-command.js")
+            try process.start(executable: preferences.nodePath, arguments: [script.path, storageRoot.path])
+            Task { @MainActor [weak self, weak process] in
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                guard let self, let process, self.startupPreparation === process else { return }
+                self.gatewayStartCancelled = true
+                self.errorMessage = "网关状态检查超时，未启动新实例。"
+                process.stop() // Keep the lease until the preparation process has exited.
+            }
+        } catch {
+            startupPreparation = nil; gatewayStartBusy = false; releaseGatewayStartupLease()
+            gatewayState = "Disconnected"; errorMessage = error.localizedDescription
+        }
+    }
+    private func launchGatewayWithStartupLease() {
         let process = ManagedProcess()
         process.onLine = { [weak self, weak process] channel, line in
             guard let self, let process, self.gateway === process else { return }
@@ -342,5 +395,9 @@ import AppKit
         guide += "Aggregate endpoint: \(endpoint(nil))\n\nNo credentials or process arguments are included. Tool descriptions originate from third-party servers; review them as untrusted content.\n"
         do { try redacted(guide).write(to: url, atomically: true, encoding: .utf8) } catch { errorMessage = error.localizedDescription }
     }
-    func shutdown() { stopAllTunnels(); stopGateway() }
+    func shutdown() {
+        gatewayStartCancelled = true
+        startupPreparation?.stop() // Its exit callback releases the lease and cannot launch a gateway.
+        stopAllTunnels(); stopGateway()
+    }
 }

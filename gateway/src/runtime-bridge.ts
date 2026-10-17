@@ -4,7 +4,7 @@ import {realpath} from 'node:fs/promises';
 import {join} from 'node:path';
 import {controlRequest,parseRequest} from './control.js';
 import {inspectLegacy} from './takeover.js';
-import {RuntimeClient} from './runtime-client.js';
+import {RuntimeClient,sharedDisconnectReason} from './runtime-client.js';
 const [home,workspace] = process.argv.slice(2);
 if (!home || !/^[A-Za-z0-9_-]{1,64}$/.test(workspace ?? '')) throw new Error('Invalid runtime context');
 const root = await realpath(home);
@@ -15,7 +15,19 @@ async function poll() {
   if (polling || closing) return;
   polling=true;
   try { emit({type:'sharedSnapshot',snapshot:await client.snapshot()}); }
-  catch (error) { try {emit({type:'legacyGatewayAvailable',candidate:await inspectLegacy(root,workspace!)});}catch{} const incompatible = error instanceof Error && /identity|Unsupported|Unknown management/.test(error.message); emit({type:'sharedDisconnected',message:incompatible?'现有网关协议或工作空间不匹配。若它由旧版本启动，请明确停止旧实例后用新版启动；本应用不会强制接管。':'共享网关连接已断开，请检查状态后重新连接。'}); closing=true; process.exitCode=1; process.stdin.destroy(); clearInterval(timer); }
+  catch (error) {
+    try {emit({type:'legacyGatewayAvailable',candidate:await inspectLegacy(root,workspace!)});}catch{}
+    const reason=sharedDisconnectReason(error);
+    const messages:Record<string,string>={
+      'identity-mismatch':'现有网关协议或工作空间不匹配。若它由旧版本启动，请明确停止旧实例后用新版启动；本应用不会强制接管。',
+      'socket-unavailable':'共享网关连接端点不可用。点击重新连接 / 启动检查并恢复；不会自动重启 MCP 或隧道。',
+      'snapshot-too-large':'共享网关状态超过传输上限，界面已断开；这不代表网关停止。请使用新版网关后重新连接。',
+      'timeout':'共享网关状态查询超时，无法确认它是否仍在运行。请重新连接检查；未重发任何操作。',
+      'unsafe-socket':'共享网关端点的权限或所有者检查未通过，未接管该实例。'
+    };
+    emit({type:'sharedDisconnected',reason,message:messages[reason]??'共享连接已断开，无法确认网关是否仍在运行。点击重新连接 / 启动检查；不会自动重发操作。'});
+    closing=true; process.exitCode=1; process.stdin.destroy(); clearInterval(timer);
+  }
   finally { polling=false; }
 }
 const timer=setInterval(()=>void poll(),2000);

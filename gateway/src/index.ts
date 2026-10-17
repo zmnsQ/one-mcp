@@ -1,3 +1,4 @@
+import {boundRuntimeSnapshot} from './runtime-snapshot.js';
 import {ConnectionJournal} from './connection-events.js';
 import { RequestJournal } from './request-journal.js';
 /** Original MCP Harbor gateway. Loopback-only; real macOS/tunnel integration requires user acceptance. */
@@ -57,6 +58,8 @@ const controlRoot = controlIndex >= 0 ? realpathSync(dirname(dirname(process.arg
 let closeControl: (() => Promise<void>) | undefined;
 let chain = Promise.resolve();
 function dispatch(command: ControlRequest): Promise<ControlResponse> {
+  // Read-only snapshots must stay responsive during long-running init/doctor operations.
+  if (command.method === 'status' || command.method === 'snapshot') return perform(command);
   const operation = chain.then(() => perform(command)).then(result => { publishConnectionEvent(result); return result; });
   chain = operation.then(() => undefined, () => undefined);
   return operation;
@@ -341,10 +344,12 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
       return rawID;
     };
     switch (command.method) {
-      case 'status': case 'snapshot': result = { protocolVersion: 1, instanceID, controlRoot, pid: process.pid, port, workspaceID,
+      case 'status': case 'snapshot': { const snapshot = { protocolVersion: 1, instanceID, controlRoot, pid: process.pid, port, workspaceID,
         servers: [...managed.values()].map(m => ({ id: m.config.id, name: m.config.name, running: m.ready, allowedTools: m.config.allowedTools, toolCount: m.tools.length, ...(command.method === 'snapshot' ? {tools: m.tools.map(t => ({...t, publicName: publicName(m.config.id,t.name)}))} : {}) })),
         ...(command.method === 'snapshot' ? {events: recentEvents, sequence: eventSequence, requests: requestJournal.snapshot(), connectionEvents: connectionJournal.snapshot()} : {}),
-        tunnels: tunnelManager.snapshot() }; break;
+        tunnels: tunnelManager.snapshot() };
+        result = command.method === 'snapshot' ? boundRuntimeSnapshot(snapshot) : snapshot;
+        break; }
       case 'startServer': await start(command.params?.server); break;
       case 'stopServer': { const id = requireID(); await tunnelManager.stopAll(); await stop(id); break; }
       case 'listTools': {

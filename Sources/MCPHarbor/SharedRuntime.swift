@@ -4,7 +4,7 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
 
 @MainActor extension HarborStore {
     func attachExistingGatewayIfPresent(force: Bool = false) {
-        guard !takeoverBusy, gateway?.running != true, runtimeBridge?.running != true,
+        guard !takeoverBusy, !gatewayStartBusy, gateway?.running != true, runtimeBridge?.running != true,
               initialConfigurationLoaded,
               force || !sharedConnectionAttempted,
               FileManager.default.fileExists(atPath: controlSocketURL.path) else { return }
@@ -44,6 +44,9 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
         }
         connectionEvents = (snapshot["connectionEvents"] as? [[String: Any]] ?? []).suffix(200).compactMap { ConnectionLogEvent.decode($0) }
         requestTraces = (snapshot["requests"] as? [[String: Any]] ?? []).suffix(80).compactMap { MCPRequestTrace.decode($0) }
+        if servers.contains(where: { $0["toolMetadataTruncated"] as? Bool == true }) {
+            notice = "工具目录较大，界面已省略部分元数据或目录。运行中的工具及白名单未改变；请勿依据不完整目录重新设置权限。"
+        }
         states = [:]; tools = [:]
         for server in servers {
             guard let id = server["id"] as? String else { continue }

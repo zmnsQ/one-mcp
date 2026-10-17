@@ -68,7 +68,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
     var storageRoot: URL { fileURL.deletingLastPathComponent() }
     var workspaceDirectory: URL { storageRoot.appendingPathComponent("Workspaces", isDirectory: true) }
     var activeConfigurationURL: URL { currentWorkspaceID == "default" ? fileURL : workspaceDirectory.appendingPathComponent(currentWorkspaceID + ".json") }
-    var anyProcessRunning: Bool { isGatewayRunning || !runningTunnelKeys.isEmpty || takeoverBusy }
+    var anyProcessRunning: Bool { isGatewayRunning || gatewayStartBusy || !runningTunnelKeys.isEmpty || takeoverBusy }
     func bootstrapWorkspaces() {
         let indexURL = storageRoot.appendingPathComponent("workspaces.json")
         if FileManager.default.fileExists(atPath: indexURL.path) {

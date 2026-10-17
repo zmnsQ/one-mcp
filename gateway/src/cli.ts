@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import {prepareRuntimeSocket} from './runtime-start.js';
 import fs from 'node:fs/promises';
 import {diagnoseMCP, compareConfiguration} from './mcp-diagnostics.js';
 import {validateIdentity} from './runtime-client.js';
@@ -116,8 +117,7 @@ try {
                 const release = await acquireLease(root); let released = false;
                 try {
                     const current = await workspace(root, w.id);
-                    try { await fs.lstat(socketPath(root)); throw new Error('Gateway already owns this workspace root'); }
-                    catch (e) { if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e; }
+                    if (await prepareRuntimeSocket(socketPath(root)) === 'existing') throw new Error('Gateway already owns this workspace root');
                     await privateDirectory(join(root, 'Runtime'));
                     const child = spawn(process.execPath, [join(dirname(fileURLToPath(import.meta.url)), 'index.js'), '--port', String(current.config.port), '--workspace-id', current.id, '--control-socket', socketPath(root)], { stdio: ['pipe', 'pipe', 'inherit'] });
                     const exited = new Promise<number | null>(yes => { child.once('error', () => yes(-1)); child.once('exit', yes); });

@@ -22,3 +22,15 @@ export class RuntimeClient {
     return this.rpc(method,{...params,expectedInstanceID:this.identity.instanceID});
   }
 }
+
+/** Fixed diagnostics only: never forward paths, credentials, or arbitrary upstream error text. */
+export function sharedDisconnectReason(error: unknown): string {
+  const code = (error as {code?:unknown})?.code;
+  if (code === 'ECONNREFUSED' || code === 'ENOENT') return 'socket-unavailable';
+  const message = error instanceof Error ? error.message : '';
+  if (/identity|Unsupported|Unknown management/.test(message)) return 'identity-mismatch';
+  if (/exceeds limit|state exceeds limit/.test(message)) return 'snapshot-too-large';
+  if (/timed out/i.test(message)) return 'timeout';
+  if (/permissions or owner/.test(message)) return 'unsafe-socket';
+  return 'connection-lost';
+}

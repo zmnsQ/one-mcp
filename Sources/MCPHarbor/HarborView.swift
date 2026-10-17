@@ -186,16 +186,16 @@ struct HarborView: View {
             Spacer()
             if store.hasUnsavedChanges { Label("有未保存修改", systemImage: "circle.fill").font(.caption).foregroundStyle(.orange) }
             if !store.pendingCommands.isEmpty { Text("等待网关确认：\(store.pendingCommands.count)").font(.caption).foregroundStyle(.secondary) }
-            Label(store.gatewayReady ? (store.isAttachedGateway ? "已连接共享网关" : "本地网关运行中") : (store.isGatewayRunning ? "正在启动" : "网关未启动"), systemImage: "circle.fill")
+            Label(store.gatewayReady ? (store.isAttachedGateway ? "已连接共享网关" : "本地网关运行中") : (store.gatewayStartBusy ? "正在检查网关" : (store.gatewayState == "Disconnected" ? "网关连接已断开" : (store.isGatewayRunning ? "正在启动" : "网关未启动"))), systemImage: "circle.fill")
                 .font(.caption).foregroundStyle(store.gatewayReady ? Color.green : Color.secondary)
             if store.isGatewayRunning {
                 Button("停止网关", systemImage: "stop.fill") {
                     approve("停止此共享网关及其连接？所有连接到该实例的 AI 和应用都会受到影响。") { store.stopGateway() }
                 }.disabled(store.takeoverBusy)
             } else {
-                Button("启动网关", systemImage: "play.fill") {
+                Button(store.gatewayState == "Disconnected" ? "重新连接 / 启动" : "启动网关", systemImage: "play.fill") {
                     approve("启动本机 OneMCP 网关？不会自动连接远端隧道或启动 MCP 服务。") { store.startGateway() }
-                }.buttonStyle(.glassProminent).disabled(!store.runtimeFilesReady || store.takeoverBusy)
+                }.buttonStyle(.glassProminent).disabled(!store.runtimeFilesReady || store.takeoverBusy || store.gatewayStartBusy)
             }
 
         }.padding(.horizontal, 24).padding(.vertical, 18)
@@ -405,7 +405,7 @@ struct HarborView: View {
             VStack(alignment: .leading, spacing: 22) {
                 GroupBox(store.isAttachedGateway ? "已连接现有网关" : "运行状态") {
                     VStack(alignment: .leading, spacing: 16) {
-                        Label(store.gatewayReady ? "本地网关运行中，ChatGPT 未验证" : (store.isGatewayRunning ? "正在启动" : (store.runtimeFilesReady ? "已准备好，尚未启动" : "需要检查运行环境")),
+                        Label(store.gatewayReady ? "本地网关运行中，ChatGPT 未验证" : (store.gatewayStartBusy ? "正在检查网关" : (store.gatewayState == "Disconnected" ? "共享连接已断开，网关状态未确认" : (store.isGatewayRunning ? "正在启动" : (store.runtimeFilesReady ? "已准备好，尚未启动" : "需要检查运行环境")))),
                               systemImage: store.gatewayReady ? "checkmark.circle.fill" : "desktopcomputer")
                             .font(.headline).foregroundStyle(store.gatewayReady ? Color.green : Color.primary)
                         Text(store.isAttachedGateway ? "与 AI 共用当前网关。这里的操作会作用于同一实例；退出本应用只断开界面连接。" : (store.gatewayReady ? "返回 MCP 服务，添加或启动你需要的工具。" : store.runtimeSetupSummary))
