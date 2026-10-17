@@ -34,6 +34,7 @@ struct HarborView: View {
     @State private var showAddMCP = false
     @State private var importAfterAddDismiss = false
     @State private var showLogs = false
+    @State private var showStartAllResults = true
     @State private var toolSearch = ""
     @State private var showWorkspaceSheet = false
     @State private var workspaceName = ""
@@ -66,6 +67,23 @@ struct HarborView: View {
         } detail: {
             VStack(spacing: 0) {
                 header
+                if !store.startAllSteps.isEmpty {
+                    DisclosureGroup(store.startAllBusy ? "全部启动进行中…" : "全部启动结果（再次点击可重试未启动项）", isExpanded: $showStartAllResults) {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(store.startAllSteps) { step in
+                                    HStack(alignment: .top) {
+                                        Image(systemName: step.status == "failed" ? "exclamationmark.triangle" : (step.status == "succeeded" ? "checkmark.circle" : "circle"))
+                                        Text(step.title).fontWeight(.medium)
+                                        Text(step.detail).foregroundStyle(.secondary)
+                                        Spacer()
+                                    }.font(.caption)
+                                }
+                            }
+                        }.frame(maxHeight: 160)
+                        if store.startAllBusy { Button("取消后续启动") { store.cancelStartAll() } }
+                    }.padding(.horizontal, 24).padding(.vertical, 8)
+                }
                 if store.legacyCandidateJSON != nil {
                     HStack {
                         Text("发现同一工作空间的旧版网关（PID \(store.legacyGatewayPID)），可停止后由新版接管。").font(.caption)
@@ -220,6 +238,14 @@ struct HarborView: View {
             if !store.pendingCommands.isEmpty { Text("等待网关确认：\(store.pendingCommands.count)").font(.caption).foregroundStyle(.secondary) }
             Label(store.gatewayReady ? (store.isAttachedGateway ? "已连接共享网关" : "本地网关运行中") : (store.gatewayStartBusy ? "正在检查网关" : (store.gatewayState == "Disconnected" ? "网关连接已断开" : (store.isGatewayRunning ? "正在启动" : "网关未启动"))), systemImage: "circle.fill")
                 .font(.caption).foregroundStyle(store.gatewayReady ? Color.green : Color.secondary)
+            Button(store.startAllBusy ? "正在全部启动…" : "全部启动", systemImage: "play.circle.fill") {
+                let plan = store.preferences, workspace = store.currentWorkspaceID, revision = store.savedRevision
+                approve(store.startAllConfirmation) {
+                    store.startAll(expectedPlan: plan, expectedWorkspace: workspace, expectedRevision: revision)
+                }
+            }.buttonStyle(.glassProminent)
+                .disabled(store.startAllBusy || store.takeoverBusy || store.hasUnsavedChanges)
+                .help(store.hasUnsavedChanges ? "请先保存修改，再全部启动" : "依次启动网关、参与的 MCP 和当前路由模式的已配置隧道")
             if store.isGatewayRunning {
                 Button("停止网关", systemImage: "stop.fill") {
                     approve("停止此共享网关及其连接？所有连接到该实例的 AI 和应用都会受到影响。") { store.stopGateway() }
@@ -249,7 +275,7 @@ struct HarborView: View {
                     Spacer()
                     Button("发现工具 / 启动", systemImage: "play.fill") {
                         approve("将在 Mac 上执行 \(server.executable) 及所填参数。MCP 程序具有你账户的文件与服务权限；仅白名单工具可通过网关调用。若选择包管理器，还可能执行下载的程序。确认启动？") { store.startServer(server) }
-                    }.buttonStyle(.glassProminent).disabled(running || !store.gatewayReady)
+                    }.buttonStyle(.glassProminent).disabled(running || !store.gatewayReady || store.startAllBusy)
                     Button("停止", systemImage: "stop.fill") { store.stopServer(server) }.buttonStyle(.glass).disabled(!running)
                 }
                 if !store.serverRestartReasons(server.id).isEmpty {
@@ -263,6 +289,10 @@ struct HarborView: View {
                         Text("点击顶部“启动网关”继续").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                Toggle("参与全部启动", isOn: Binding(get: { store.preferences.servers[index].participatesInStartAll },
+                    set: { store.preferences.servers[index].startWithAll = $0 }))
+                    .help("取消后仅从全部启动中排除，不会停止正在运行的服务，也不影响手动启动")
+                    .disabled(store.startAllBusy)
                 GroupBox("进程配置") {
                     Form {
                         TextField("名称", text: $store.preferences.servers[index].name)
@@ -598,9 +628,9 @@ struct HarborView: View {
                     TunnelDashboardPanel(snapshot: store.tunnelHealthSnapshots[key]).id(base.absoluteString)
                 }
                 HStack {
-                    Button("创建新连接配置") { approve("执行官方 tunnel-client init，为 \(store.endpoint(server)) 创建本机 profile？请使用新的唯一名称；若已存在请检查 CLI 输出。此操作不会启动服务。") { store.tunnelAction("init", server: server) } }.disabled(store.tunnelRunning(key) || !store.gatewayReady || usesExistingFile)
-                    Button("检查连接") { approve("执行 tunnel-client doctor？它可能使用本次会话密钥连接 OpenAI，并检查本机 MCP 端点。") { store.tunnelAction("doctor", server: server) } }.disabled(store.tunnelRunning(key) || !store.gatewayReady)
-                    Button("启动隧道") { approve("将本机端点接入所填 OpenAI 隧道？运行期间，获授权的 OpenAI 工作区可发现并调用白名单工具，数据与结果会发送到 OpenAI。请先核对工作区和工具白名单。") { store.tunnelAction("run", server: server) } }.buttonStyle(.glassProminent).disabled(store.tunnelRunning(key) || !store.gatewayReady)
+                    Button("创建新连接配置") { approve("执行官方 tunnel-client init，为 \(store.endpoint(server)) 创建本机 profile？请使用新的唯一名称；若已存在请检查 CLI 输出。此操作不会启动服务。") { store.tunnelAction("init", server: server) } }.disabled(store.startAllBusy || store.hasPendingCommand(for: key) || store.tunnelRunning(key) || !store.gatewayReady || usesExistingFile)
+                    Button("检查连接") { approve("执行 tunnel-client doctor？它可能使用本次会话密钥连接 OpenAI，并检查本机 MCP 端点。") { store.tunnelAction("doctor", server: server) } }.disabled(store.startAllBusy || store.hasPendingCommand(for: key) || store.tunnelRunning(key) || !store.gatewayReady)
+                    Button("启动隧道") { approve("将本机端点接入所填 OpenAI 隧道？运行期间，获授权的 OpenAI 工作区可发现并调用白名单工具，数据与结果会发送到 OpenAI。请先核对工作区和工具白名单。") { store.tunnelAction("run", server: server) } }.buttonStyle(.glassProminent).disabled(store.startAllBusy || store.hasPendingCommand(for: key) || store.tunnelRunning(key) || !store.gatewayReady)
                     Button("停止") { store.stopTunnel(key) }.disabled(!store.tunnelRunning(key))
                 }
                 Text("每个隧道使用系统分配的独立 loopback 管理端口；本界面持续读取 /readyz，只有实际 HTTP 200 才亮绿灯。ChatGPT 调用仍需单独验收。").font(.caption).foregroundStyle(.secondary)

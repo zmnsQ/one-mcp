@@ -25,7 +25,7 @@ let calls=0;
 await assert.rejects(prepareRuntimeSocket('/private/control.sock',{...stable,stat:async()=>({dev:1,ino:++calls})}),/changed/);assert.equal(moved.length,0);
 assert.equal(await prepareRuntimeSocket('/private/control.sock',{...stable,stat:async()=>{throw Object.assign(Error('absent'),{code:'ENOENT'});}}),'available');assert.equal(moved.length,0);
 const native=await fs.readFile('../Sources/MCPHarbor/HarborStore.swift','utf8');
-const startup=native.slice(native.indexOf('    func startGateway()'),native.indexOf('    private func launchGatewayWithStartupLease()'));
+const startup=native.slice(native.indexOf('    func startGateway('),native.indexOf('    private func launchGatewayWithStartupLease()'));
 assert.ok(startup.indexOf('gateway = nil') < startup.indexOf('acquireConfigurationLease()'));
 assert.match(startup,/guard !self.gatewayStartCancelled/);
 assert.match(startup,/5_000_000_000/);

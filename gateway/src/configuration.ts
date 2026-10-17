@@ -11,7 +11,7 @@ export const serverSchema = z.object({
     id: identifier, name: cleanString(100).min(1), executable: cleanString(4096), arguments: z.array(cleanString(8191)).max(128),
     workingDirectory: cleanString(4096), environmentKeys: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).refine(s => s !== '__tunnel_key')).max(128).refine(unique),
     allowedTools: z.array(cleanString(256).min(1).refine(s => s !== '*')).max(500).refine(unique),
-    tunnelID: cleanString(256), profile: cleanString(64)
+    tunnelID: cleanString(256), profile: cleanString(64), startWithAll: z.boolean().optional()
 });
 export const preferencesSchema = z.object({
     nodePath: cleanString(4096), gatewayScript: cleanString(4096), tunnelClientPath: cleanString(4096), port: z.number().int().min(1024).max(65535),

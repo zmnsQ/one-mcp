@@ -37,6 +37,11 @@ import AppKit
     @Published var preferences = Preferences()
     @Published var savedPreferences = Preferences()
     var hasUnsavedChanges: Bool { preferences != savedPreferences }
+    @Published var startAllBusy = false
+    @Published var startAllSteps: [StartAllStep] = []
+    var startAllRevision: String?
+    var startAllTask: Task<Void, Never>?
+    var commandResults: [String: String] = [:]
     @Published var pendingCommands: [String: String] = [:]
     private var commandContexts: [String: (method: String, serverID: String?)] = [:]
     private var commandTimeouts: [String: Task<Void, Never>] = [:]
@@ -127,7 +132,7 @@ import AppKit
         logs.append(LogLine(source: source, text: String(redacted(text).prefix(8000))))
         if logs.count > 1000 { logs.removeFirst(logs.count - 1000) }
     }
-    func startGateway() {
+    func startGateway(persistConfiguration: Bool = true) {
         guard !takeoverBusy, !gatewayStartBusy, !isGatewayRunning else { return }
         // Retire an exited owner before acquiring a new lease. Its delayed pipe-drain
         // callback must not clear the new startup state or release the new lease.
@@ -169,7 +174,7 @@ import AppKit
             if preparedState == "existing" {
                 self.releaseGatewayStartupLease(); self.attachExistingGatewayIfPresent(force: true); return
             }
-            guard preparedState == "available", self.save() else { self.releaseGatewayStartupLease(); self.gatewayState = "Disconnected"; return }
+            guard preparedState == "available", (!persistConfiguration || self.save()) else { self.releaseGatewayStartupLease(); self.gatewayState = "Disconnected"; return }
             self.launchGatewayWithStartupLease()
         }
         do {
@@ -217,6 +222,7 @@ import AppKit
         } catch { releaseGatewayStartupLease(); gatewayState = "Stopped"; errorMessage = error.localizedDescription }
     }
     func stopGateway() {
+        cancelStartAll()
         if isAttachedGateway {
             command("shutdown", params: [:]); gatewayState = "Stopping"; return
         }
@@ -246,6 +252,8 @@ import AppKit
             clearPendingCommands(); clearAppliedConfiguration(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; requestTraces = []; self.connectionEvents = []
         case "response":
             if let requestID = event["id"] as? String {
+                if commandResults.count > 100 { commandResults = [:] }
+                commandResults[requestID] = event["ok"] as? Bool == true ? "ok" : redacted(event["error"] as? String ?? "网关未确认操作成功")
                 let context = commandContexts.removeValue(forKey: requestID)
                 pendingCommands[requestID] = nil
                 commandTimeouts.removeValue(forKey: requestID)?.cancel()
@@ -264,6 +272,7 @@ import AppKit
         case "tunnelProfile":
             if let key = event["key"] as? String, let path = event["profileLocation"] as? String { tunnelProfileLocations[key] = path }
         case "tunnelStatus":
+            refreshStartAllTunnel(event)
             if let key = event["key"] as? String {
                 if event["running"] as? Bool == true { runningTunnelKeys.insert(key) } else { runningTunnelKeys.remove(key) }
                 appliedTunnelFingerprints[key] = event["running"] as? Bool == true ? ConfigurationFingerprint.decode(event) : nil
@@ -324,10 +333,11 @@ import AppKit
         commandContexts.values.contains { $0.serverID == serverID }
     }
     @discardableResult func command(_ method: String, params: [String: Any]) -> Bool {
+        if ["stopServer", "stopTunnel", "stopAllTunnels", "shutdown"].contains(method) { cancelStartAll() }
         guard isGatewayRunning else { errorMessage = "网关未运行，请先启动网关。"; return false }
         let id = UUID().uuidString
         let configID = (params["server"] as? [String: Any])?["id"] as? String
-        let serverID = (params["serverId"] as? String) ?? configID
+        let serverID = (params["serverId"] as? String) ?? configID ?? (params["key"] as? String)
         do {
             guard let transport = isAttachedGateway ? runtimeBridge : gateway else { return false }
             try transport.send(["id": id, "method": method, "params": params])
@@ -343,25 +353,27 @@ import AppKit
         } catch { errorMessage = redacted(error.localizedDescription); return false }
     }
     func credentialKey(serverID: String, variable: String) -> String { serverID + ":" + variable }
-    func startServer(_ server: ServerConfig) {
-        guard !hasPendingCommand(for: server.id), states[server.id] != "running" else { return }
-        guard gatewayReady else { errorMessage = "请先启动本机网关。"; return }
-        guard server.executable.hasPrefix("/") else { errorMessage = "MCP可执行文件须为绝对路径。"; return }
+    @discardableResult func startServer(_ server: ServerConfig, persistConfiguration: Bool = true) -> Bool {
+        guard !hasPendingCommand(for: server.id), states[server.id] != "running" else { return false }
+        guard gatewayReady else { errorMessage = "请先启动本机网关。"; return false }
+        guard server.executable.hasPrefix("/") else { errorMessage = "MCP可执行文件须为绝对路径。"; return false }
         var validationScope = preferences; validationScope.servers = [server]
-        do { try validatePreferences(validationScope) } catch { errorMessage = error.localizedDescription; return }
+        do { try validatePreferences(validationScope) } catch { errorMessage = error.localizedDescription; return false }
         var environment: [String: String] = [:]
         for key in server.environmentKeys {
-            guard let value = runtimeValues[credentialKey(serverID: server.id, variable: key)], !value.isEmpty else { errorMessage = "请输入 \(server.name) 的 \(key) 本次会话值。"; return }
+            guard let value = runtimeValues[credentialKey(serverID: server.id, variable: key)], !value.isEmpty else { errorMessage = "请输入 \(server.name) 的 \(key) 本次会话值。"; return false }
             environment[key] = value
             redactionValues.insert(value)
         }
         var config: [String: Any] = ["id": server.id, "name": server.name, "executable": server.executable,
             "arguments": server.arguments, "environment": environment, "allowedTools": server.allowedTools]
         if !server.workingDirectory.isEmpty { config["workingDirectory"] = server.workingDirectory }
-        guard save() else { return }
-        if command("startServer", params: ["server": config]) { states[server.id] = "starting" }
+        guard !persistConfiguration || save() else { return false }
+        if command("startServer", params: ["server": config]) { states[server.id] = "starting"; return true }
+        return false
     }
     func stopServer(_ server: ServerConfig) {
+        cancelStartAll()
         // Withdraw external reachability before stopping a backend.
         stopAllTunnels()
         command("stopServer", params: ["serverId": server.id])
@@ -370,17 +382,18 @@ import AppKit
         "http://127.0.0.1:\(attachedPort ?? preferences.port)" + (server.map { "/servers/\($0.id)/mcp" } ?? "/mcp")
     }
     func tunnelRunning(_ key: String) -> Bool { runningTunnelKeys.contains(key) }
-    func tunnelAction(_ action: String, server: ServerConfig?) {
+    @discardableResult func tunnelAction(_ action: String, server: ServerConfig?, persistConfiguration: Bool = true) -> Bool {
         let key = server?.id ?? "aggregate"
-        guard gatewayReady, !tunnelRunning(key), ["init", "doctor", "run"].contains(action) else { errorMessage = "请启动网关并等待当前隧道操作完成。"; return }
-        guard save() else { return }
+        guard gatewayReady, !tunnelRunning(key), !hasPendingCommand(for: key), ["init", "doctor", "run"].contains(action) else { errorMessage = "请启动网关并等待当前隧道操作完成。"; return false }
+        guard !persistConfiguration || save() else { return false }
         redactionValues.insert(tunnelKey)
         var parameters: [String: Any] = ["key": key, "action": action, "executable": preferences.tunnelClientPath,
             "profile": server?.profile ?? preferences.aggregateProfile, "tunnelID": server?.tunnelID ?? preferences.aggregateTunnelID, "runtimeKey": tunnelKey]
         if server == nil, let profileFile = preferences.aggregateProfileFile, !profileFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { parameters["profileFile"] = profileFile }
         if command("tunnelAction", params: parameters) {
-            tunnelStates[key] = "请求已提交，等待进程确认"; doctorPassed[key] = false
+            tunnelStates[key] = "请求已提交，等待进程确认"; doctorPassed[key] = false; return true
         }
+        return false
     }
     func tunnelTargetSignature(key: String) -> String {
         let server = preferences.servers.first { $0.id == key }
@@ -398,7 +411,7 @@ import AppKit
         return "自行准备 tunnel ID 与运行密钥，使用唯一 profile 初始化；已有 profile 可直接运行 Doctor 检查。修改目标后需重新检查。"
     }
     func stopTunnel(_ key: String) { guard isGatewayRunning else { return }; command("stopTunnel", params: ["key": key]) }
-    func stopAllTunnels() { guard isGatewayRunning else { runningTunnelKeys.removeAll(); return }; command("stopAllTunnels", params: [:]) }
+    func stopAllTunnels() { cancelStartAll(); guard isGatewayRunning else { runningTunnelKeys.removeAll(); return }; command("stopAllTunnels", params: [:]) }
     func exportToolGuide() {
         let panel = NSSavePanel()
         panel.nameFieldStringValue = "One-MCP-Tool-Guide.md"
@@ -414,6 +427,7 @@ import AppKit
         do { try redacted(guide).write(to: url, atomically: true, encoding: .utf8) } catch { errorMessage = error.localizedDescription }
     }
     func shutdown() {
+        cancelStartAll()
         gatewayStartCancelled = true
         startupPreparation?.stop() // Its exit callback releases the lease and cannot launch a gateway.
         stopAllTunnels(); stopGateway()

@@ -1,0 +1,32 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {serverSchema,defaults,workspace,writeConfiguration} from '../dist/configuration.js';
+const old={id:'s',name:'MCP',executable:'/usr/bin/node',arguments:[],workingDirectory:'',environmentKeys:[],allowedTools:[],tunnelID:'',profile:''};
+assert.equal(serverSchema.parse(old).startWithAll,undefined);
+assert.equal(serverSchema.parse({...old,startWithAll:false}).startWithAll,false);
+assert.throws(()=>serverSchema.parse({...old,startWithAll:'false'}));
+const root=await fs.mkdtemp(path.join(os.tmpdir(),'onemcp-bulk-'));
+try {
+ let w=await workspace(root);await writeConfiguration(w,{...defaults(),servers:[{...old,startWithAll:false}]},w.revision);
+ w=await workspace(root);assert.equal(w.config.servers[0].startWithAll,false);
+ await writeConfiguration(w,{...w.config,port:9999},w.revision);
+ assert.equal((await workspace(root)).config.servers[0].startWithAll,false);
+}finally{await fs.rm(root,{recursive:true,force:true});}
+console.log('PASS bulk participation old-config compatibility, boolean validation and CLI round-trip preservation');
+const bulk=await fs.readFile('../Sources/MCPHarbor/StartAll.swift','utf8');
+assert.match(bulk,/guard !startAllBusy/);assert.match(bulk,/!hasUnsavedChanges/);
+assert.match(bulk,/preferences == plan/);assert.match(bulk,/startAllRevision == configurationRevision/);assert.match(bulk,/acquireConfigurationLease/);assert.match(bulk,/expectedPlan == preferences/);assert.match(bulk,/Task\.isCancelled/);
+assert.match(bulk,/persistConfiguration: false/);
+assert.match(bulk,/server\.participatesInStartAll/);
+assert.match(bulk,/hasPendingCommand\(for: target\)/);
+assert.match(bulk,/tunnelAction\("run"/);assert.doesNotMatch(bulk,/tunnelAction\("init"|SecretVault|allowedTools\s*=/);
+assert.ok(bulk.indexOf('self.gatewayReady')<bulk.indexOf('startServer(server'));
+assert.ok(bulk.indexOf('startServer(server')<bulk.indexOf('tunnelAction("run"'));
+const store=await fs.readFile('../Sources/MCPHarbor/HarborStore.swift','utf8');
+assert.match(store,/params\["key"\] as\? String/);
+assert.match(store,/func stopGateway\(\) \{\s*cancelStartAll/);
+const view=await fs.readFile('../Sources/MCPHarbor/HarborView.swift','utf8');
+assert.match(view,/approve\(store.startAllConfirmation\)/);
+console.log('PASS native bulk source contracts: dependency ordering, cancellation, config snapshot, pending guards and no credential/profile creation (Swift not executed)');

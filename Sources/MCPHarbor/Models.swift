@@ -10,6 +10,8 @@ struct ServerConfig: Codable, Identifiable, Hashable {
     var allowedTools: [String] = []
     var tunnelID = ""
     var profile = ""
+    var startWithAll: Bool?
+    var participatesInStartAll: Bool { startWithAll != false }
 }
 struct Preferences: Codable, Equatable {
     var nodePath = "/opt/homebrew/bin/node"
