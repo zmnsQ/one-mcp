@@ -2,11 +2,11 @@ import Foundation
 import CryptoKit
 
 enum ConfigurationReloadDecision: Equatable {
-    case unchanged, reload, preserveEdits, deferUntilStopped
+    case unchanged, reload, preserveEdits
     static func decide(saved: String, disk: String, dirty: Bool, running: Bool) -> Self {
         if saved == disk { return .unchanged }
         if dirty { return .preserveEdits }
-        return running ? .deferUntilStopped : .reload
+        return .reload
     }
 }
 
@@ -85,23 +85,30 @@ enum ConfigurationReloadDecision: Equatable {
         // No locks are held while waiting; a writer publishes a complete atomic snapshot.
         guard configurationLeaseToken == nil,
               !FileManager.default.fileExists(atPath: storageRoot.appendingPathComponent(".configuration-lock").path) else { return }
-        guard let data = try? Data(contentsOf: activeConfigurationURL), data.count <= 1_048_576 else { return }
+        // A fresh default workspace intentionally has no file until the first explicit save.
+        if savedRevision == "missing", currentWorkspaceID == "default",
+           !FileManager.default.fileExists(atPath: activeConfigurationURL.path) { return }
+        guard let data = try? Data(contentsOf: activeConfigurationURL), data.count <= 1_048_576 else {
+            externalConfigurationNotice = "外部配置无法读取或超过大小限制，当前界面内容已保留。"; return
+        }
         let latest = revision(of: data)
         let decision = ConfigurationReloadDecision.decide(saved: savedRevision, disk: latest,
                                                           dirty: hasUnsavedChanges && !discardLocalChanges, running: anyProcessRunning)
         switch decision {
-        case .unchanged: return
+        case .unchanged:
+            externalConfigurationNotice = nil
+            return
         case .preserveEdits:
             externalConfigurationNotice = "AI 已更新磁盘配置。你的未保存修改仍保留，请核对后选择是否载入磁盘版本。"
-            return
-        case .deferUntilStopped:
-            externalConfigurationNotice = "AI 已保存新配置，运行中的服务保持原样。停止本应用服务后将载入新配置；不会自动重启。"
             return
         case .reload: break
         }
         do {
             let loaded = try JSONDecoder().decode(Preferences.self, from: data)
             try validatePreferences(loaded, requireInstalled: false)
+            // Do not pair decoded bytes with a newer revision, or accept a workspace switch mid-read.
+            guard data == (try? Data(contentsOf: activeConfigurationURL)),
+                  !FileManager.default.fileExists(atPath: storageRoot.appendingPathComponent(".configuration-lock").path) else { return }
             preferences = loaded; savedPreferences = loaded; savedRevision = latest; storageReadable = true
             if !preferences.servers.contains(where: { $0.id == selectedID }) { selectedID = preferences.servers.first?.id }
             externalConfigurationNotice = nil

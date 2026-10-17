@@ -6,7 +6,7 @@ import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {execFileSync} from 'node:child_process';
 const root=path.resolve(process.argv[2]||'gateway');
-for(const file of ['dist/request-journal.js', 'dist/connection-events.js','dist/tunnel-health.js','dist/mcp-diagnostics.js','dist/tunnel-errors.js','dist/takeover-command.js','dist/takeover.js','dist/runtime-bridge.js','dist/runtime-client.js','dist/index.js','dist/cli.js','package.json','node_modules/@modelcontextprotocol/sdk/package.json','node_modules/zod/package.json']){
+for(const file of ['dist/configuration-fingerprints.js','dist/request-journal.js', 'dist/connection-events.js','dist/tunnel-health.js','dist/mcp-diagnostics.js','dist/tunnel-errors.js','dist/takeover-command.js','dist/takeover.js','dist/runtime-bridge.js','dist/runtime-client.js','dist/index.js','dist/cli.js','package.json','node_modules/@modelcontextprotocol/sdk/package.json','node_modules/zod/package.json']){
  if(!fs.statSync(path.join(root,file)).isFile())throw Error(`Missing gateway component: ${file}`);
 }
 const require=createRequire(pathToFileURL(path.join(root,'dist/index.js')));

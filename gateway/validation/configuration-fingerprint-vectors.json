@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "algorithm": "SHA256 of concatenated UTF-8 byte-length-prefixed strings; sets deduplicated by bytes and ordered by UTF-8 bytes",
+  "vectors": [
+    {
+      "label": "empty-list",
+      "values": [],
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "empty-scalar",
+      "values": [
+        ""
+      ],
+      "sha256": "ba768b331fd86cec803be04e56ab2b3d4c0e98ef4ee4fcd4e72ad7cce61a1d1f"
+    },
+    {
+      "label": "ascii-scalar",
+      "values": [
+        "hello"
+      ],
+      "sha256": "a3a285698dc7dbfe23947339ee187d471f643617f88b4af70209bb1a01edd9d9"
+    },
+    {
+      "label": "boundaries-left",
+      "values": [
+        "a",
+        "bc"
+      ],
+      "sha256": "5310a58788781ab25d5ad7c3f85035824b4eb7bdfa394e0ac2186271472b5492"
+    },
+    {
+      "label": "boundaries-right",
+      "values": [
+        "ab",
+        "c"
+      ],
+      "sha256": "430fb1b4ac43316eca81fab27a1930ab8eff8fef6a1dc7903dce44bbc2790dc5"
+    },
+    {
+      "label": "unicode-and-escaping",
+      "values": [
+        "工具🧪",
+        "/tmp/\"a\"\\b\nc:3",
+        "  "
+      ],
+      "sha256": "04cfd960551605b10820b37c5435c700d54085749ef8d78df72f143f855aa14b"
+    },
+    {
+      "label": "byte-distinct-normalizations",
+      "values": [
+        "é",
+        "é"
+      ],
+      "sha256": "ca8aba171040d7e70342d109be769cbcfb5ab7b3fac818276915922e4de2f261"
+    },
+    {
+      "label": "utf8-sorted-set",
+      "values": [
+        "a",
+        "é",
+        "é",
+        "",
+        "🧪"
+      ],
+      "sha256": "693a9074bcf5ef2ede158daaaf800f957f26bc26e6e4dda320bfb4a6a33884c6"
+    }
+  ]
+}

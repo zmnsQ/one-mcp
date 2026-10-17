@@ -1,6 +1,6 @@
 import Foundation
 
-struct SharedServerSummary: Identifiable { let id: String; let name: String; let running: Bool; let allowedTools: [String] }
+struct SharedServerSummary: Identifiable { let id: String; let name: String; let running: Bool; let allowedTools: [String]; var permissionsKnown = true }
 
 @MainActor extension HarborStore {
     func attachExistingGatewayIfPresent(force: Bool = false) {
@@ -23,7 +23,7 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
             self.runtimeBridge = nil; self.isAttachedGateway = false; self.attachedPort = nil
             let wasDisconnected = self.gatewayState == "Disconnected"
             self.gatewayState = "Disconnected"; self.clearPendingCommands()
-            self.sharedRuntimeServers = []; self.states = [:]; self.tools = [:]; self.runningTunnelKeys = []; self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.requestTraces = []; self.connectionEvents = []
+            self.clearAppliedConfiguration(); self.sharedRuntimeServers = []; self.states = [:]; self.tools = [:]; self.runningTunnelKeys = []; self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.requestTraces = []; self.connectionEvents = []
             if !wasDisconnected { self.notice = "共享网关连接已结束。可点击启动服务重新连接，不会自动重发操作。" }
         }
         do {
@@ -37,10 +37,12 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
         legacyCandidateJSON = nil
         isAttachedGateway = true; gatewayState = "Ready · loopback only"
         attachedPort = snapshot["port"] as? Int
+        appliedGatewayFingerprints = ConfigurationFingerprint.decode(snapshot)
+        appliedServerFingerprints = [:]; appliedTunnelFingerprints = [:]
         let servers = snapshot["servers"] as? [[String: Any]] ?? []
         sharedRuntimeServers = servers.compactMap { item in
             guard let id = item["id"] as? String else { return nil }
-            return SharedServerSummary(id: id, name: item["name"] as? String ?? id, running: item["running"] as? Bool ?? false, allowedTools: item["allowedTools"] as? [String] ?? [])
+            return SharedServerSummary(id: id, name: item["name"] as? String ?? id, running: item["running"] as? Bool ?? false, allowedTools: item["allowedTools"] as? [String] ?? [], permissionsKnown: item["allowedTools"] is [String])
         }
         connectionEvents = (snapshot["connectionEvents"] as? [[String: Any]] ?? []).suffix(200).compactMap { ConnectionLogEvent.decode($0) }
         requestTraces = (snapshot["requests"] as? [[String: Any]] ?? []).suffix(80).compactMap { MCPRequestTrace.decode($0) }
@@ -51,6 +53,7 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
         for server in servers {
             guard let id = server["id"] as? String else { continue }
             states[id] = server["running"] as? Bool == true ? "running" : "stopped"
+            appliedServerFingerprints[id] = ConfigurationFingerprint.decode(server)
             if let catalogue = server["tools"] as? [[String: Any]],
                let data = try? JSONSerialization.data(withJSONObject: ["type":"tools", "serverId":id, "tools":catalogue]),
                let line = String(data: data, encoding: .utf8) { consumeEvent(line) }
@@ -65,9 +68,6 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
             sharedEventSequence = sequence
             if let message = event["message"] as? String { log(event["serverId"] as? String ?? "shared gateway", message) }
         }
-        if Set(preferences.servers.map(\.id)) != Set(sharedRuntimeServers.map(\.id)) || sharedRuntimeServers.contains(where: { live in preferences.servers.first(where: { $0.id == live.id })?.allowedTools != live.allowedTools }) {
-            externalConfigurationNotice = "磁盘配置与当前运行快照不同。当前服务及权限见设置中的共享网关；保存不会自动重启或改变运行权限。"
-        } else if preferences.port != attachedPort { externalConfigurationNotice = "正在使用现有网关的端口。磁盘配置不会自动改变运行实例。" }
     }
     var legacyGatewayPID: String {
         guard let json = legacyCandidateJSON, let data = json.data(using: .utf8),
@@ -111,6 +111,7 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
     func detachSharedGateway() {
         let bridge = runtimeBridge
         runtimeBridge = nil; isAttachedGateway = false; attachedPort = nil
+        clearAppliedConfiguration()
         bridge?.stop() // Stops only our adapter; never sends shutdown to the external gateway.
     }
 }

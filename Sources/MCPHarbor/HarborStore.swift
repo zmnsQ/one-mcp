@@ -62,6 +62,9 @@ import AppKit
     @Published var legacyCandidateJSON: String?
     @Published var isAttachedGateway = false
     @Published var sharedRuntimeServers: [SharedServerSummary] = []
+    @Published var appliedServerFingerprints: [String: [String: String]] = [:]
+    @Published var appliedTunnelFingerprints: [String: [String: String]] = [:]
+    @Published var appliedGatewayFingerprints: [String: String] = [:]
     var attachedPort: Int?
     var sharedEventSequence = 0
     var sharedConnectionAttempted = false
@@ -132,7 +135,7 @@ import AppKit
         releaseGatewayStartupLease()
         clearPendingCommands()
         detachSharedGateway() // Discard only a failed adapter, never stop the shared gateway.
-        sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []
+        clearAppliedConfiguration(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []
         tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]
         requestTraces = []; connectionEvents = []
         resolveRuntimePaths()
@@ -194,6 +197,7 @@ import AppKit
             guard let self, let process, self.gateway === process else { return }
             self.releaseGatewayStartupLease()
             self.gatewayState = "Stopped (exit \(status))"
+            self.clearAppliedConfiguration(); self.sharedRuntimeServers = []; self.attachedPort = nil
             self.clearPendingCommands()
             self.runningTunnelKeys.removeAll()
             self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.requestTraces = []; self.connectionEvents = []
@@ -239,7 +243,7 @@ import AppKit
             notice = event["message"] as? String
             runtimeBridge?.stop()
             isAttachedGateway = false; gatewayState = "Disconnected"; attachedPort = nil
-            clearPendingCommands(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; requestTraces = []; self.connectionEvents = []
+            clearPendingCommands(); clearAppliedConfiguration(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; requestTraces = []; self.connectionEvents = []
         case "response":
             if let requestID = event["id"] as? String {
                 let context = commandContexts.removeValue(forKey: requestID)
@@ -262,6 +266,7 @@ import AppKit
         case "tunnelStatus":
             if let key = event["key"] as? String {
                 if event["running"] as? Bool == true { runningTunnelKeys.insert(key) } else { runningTunnelKeys.remove(key) }
+                appliedTunnelFingerprints[key] = event["running"] as? Bool == true ? ConfigurationFingerprint.decode(event) : nil
                 tunnelReady[key] = event["ready"] as? Bool ?? false
                 tunnelHealthSnapshots[key] = (event["running"] as? Bool == true) ? TunnelHealthSnapshot(event["health"] as? [String: Any]) : nil
                 tunnelHealthURLs[key] = (event["running"] as? Bool == true) ? TunnelDashboardURL.validated(event["healthURL"] as? String) : nil
@@ -277,8 +282,21 @@ import AppKit
                     if event["action"] as? String == "init" { initializedTargets[key] = exitCode == 0 ? signature : nil }
                 }
             }
-        case "ready": gatewayState = "Ready · loopback only"; releaseGatewayStartupLease()
-        case "serverStatus": states[id] = event["status"] as? String ?? "unknown"
+        case "ready":
+            gatewayState = "Ready · loopback only"; releaseGatewayStartupLease()
+            attachedPort = event["port"] as? Int
+            appliedGatewayFingerprints = ConfigurationFingerprint.decode(event)
+        case "serverStatus":
+            states[id] = event["status"] as? String ?? "unknown"
+            appliedServerFingerprints[id] = ConfigurationFingerprint.decode(event)
+            if event["status"] as? String == "running" {
+                let name = event["name"] as? String ?? preferences.servers.first(where: { $0.id == id })?.name ?? id
+                let allowed = event["allowedTools"] as? [String] ?? []
+                sharedRuntimeServers.removeAll { $0.id == id }
+                sharedRuntimeServers.append(.init(id: id, name: name, running: true, allowedTools: allowed, permissionsKnown: event["allowedTools"] is [String]))
+            } else if ["stopped", "error", "failed"].contains(event["status"] as? String ?? "") {
+                sharedRuntimeServers.removeAll { $0.id == id }
+            }
         case "tools":
             let previous = tools[id]
             tools[id] = (event["tools"] as? [[String: Any]] ?? []).compactMap {

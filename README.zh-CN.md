@@ -68,3 +68,5 @@ bash scripts/build-macos-app.sh
 ## CLI 与 AI 管理
 
 界面聚焦 MCP 服务、ChatGPT 连接和设置，工具授权直接放在对应服务详情内。CLI 复用相同工作空间和网关，不另建一套配置。构建 gateway 后运行 `./bin/onemcp help`，参阅 [CLI 文档](docs/CLI.md) 与可选 [AI Skill](skills/one-mcp/SKILL.md)。修改先预览，保存需明确配置版本；设置页支持只读发现官方 tunnel-client 与已有 profile 元数据，选择后仍需核对保存。
+
+AI / CLI 保存配置后，界面会在下一次自动检查（约1秒）同步显示，不需要先停止网关。有未保存的本地修改时会保留并提示选择；已变化的运行项目单独显示“待重启生效”，工具白名单和当前进程不会被自动修改。已删除但仍运行的项目可单独停止。

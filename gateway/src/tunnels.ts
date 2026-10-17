@@ -5,6 +5,7 @@ import { join, isAbsolute } from 'node:path';
 import { TunnelActionError, classifyTunnelDiagnostic, tunnelErrors, TunnelErrorCode } from './tunnel-errors.js';
 import { constants } from 'node:fs';
 import { tmpdir } from 'node:os';
+import { configurationFingerprintVersion, ConfigurationFingerprints, tunnelConfigurationFingerprints } from './configuration-fingerprints.js';
 type Target = {
     key: string;
     action: 'init' | 'doctor' | 'run';
@@ -22,6 +23,7 @@ type Running = {
     timer?: NodeJS.Timeout;
     folder?: string;
     checking: boolean;
+    configurationFingerprints: ConfigurationFingerprints;
 };
 export function profileLocationEnvironment(source:NodeJS.ProcessEnv):Record<string,string> {
     const result:Record<string,string>={};
@@ -65,6 +67,7 @@ export class TunnelManager {
         if ([...this.running.values()].some(r => r.target.profile === t.profile || r.target.tunnelID === t.tunnelID)) throw new TunnelActionError('TUNNEL_DUPLICATE');
         const endpoint = `http://127.0.0.1:${this.port}${t.key === 'aggregate' ? '/mcp' : `/servers/${t.key}/mcp`}`;
         const signature = [t.executable, t.profile, t.tunnelID, endpoint, t.profileFile ?? ''].join('\n');
+        const configurationFingerprints = tunnelConfigurationFingerprints(t, endpoint);
         const args = t.profileFile ? [t.action, '--profile-file', t.profileFile] : [t.action, '--profile', t.profile];
         let folder: string | undefined;
         if (t.action === 'init')
@@ -80,7 +83,7 @@ export class TunnelManager {
             env: { PATH: process.env.PATH, HOME: process.env.HOME, ...profileLocationEnvironment(process.env), ...(t.runtimeKey ? {CONTROL_PLANE_API_KEY: t.runtimeKey} : {}), CONTROL_PLANE_TUNNEL_ID: t.tunnelID, MCP_SERVER_URL: endpoint } });
         let resolveClosed!: () => void;
         const r: Running = { target: { key: t.key, action: t.action, executable: t.executable, profile: t.profile, tunnelID: t.tunnelID }, child,
-            ready: false, checking: false, folder, closed: new Promise(resolve => { resolveClosed = resolve; }) };
+            configurationFingerprints, ready: false, checking: false, folder, closed: new Promise(resolve => { resolveClosed = resolve; }) };
         this.running.set(t.key, r);
         // No raw tunnel stdout/stderr enters logs, as credentials may appear in diagnostics.
         let diagnostic: TunnelErrorCode | undefined;
@@ -93,7 +96,7 @@ export class TunnelManager {
                 this.running.delete(t.key);
             const failure = code === 0 ? undefined : (diagnostic ?? 'TUNNEL_FAILED');
             diagnosticTail = '';
-            this.event(t.key, { ...(failure ? {errorOrigin:'official-client', errorCode: failure, message: tunnelErrors[failure]} : {}), running: false, ready: false, action: t.action, exitCode: code, signature,
+            this.event(t.key, { ...(failure ? {errorOrigin:'official-client', errorCode: failure, message: tunnelErrors[failure]} : {}), running: false, ready: false, action: t.action, exitCode: code, signature, configurationFingerprintVersion, configurationFingerprints,
                 state: t.action === 'run' ? `Stopped (${code ?? 'signal'})` : `${t.action} ${code === 0 ? 'passed' : 'failed'}` });
             if (folder)
                 void fs.rm(folder, { recursive: true, force: true });
@@ -106,7 +109,7 @@ export class TunnelManager {
             await r.closed;
             throw e;
         }
-        this.event(t.key, { running: true, ready: false, action: t.action, signature, state: 'Process started; readiness unverified' });
+        this.event(t.key, { running: true, ready: false, action: t.action, signature, configurationFingerprintVersion, configurationFingerprints, state: 'Process started; readiness unverified' });
         if (folder)
             r.timer = setInterval(() => { void this.check(r, signature); }, 1000);
         return { key: t.key, action: t.action, submitted: true, ready: false };
@@ -132,12 +135,12 @@ export class TunnelManager {
             r.ready = response.status === 200;
             const health = await readTunnelHealth(url).catch(() => ({available:false,reason:'unavailable'}));
             if (this.running.get(r.target.key) !== r) return;
-            this.event(r.target.key, { running: true, ready: r.ready, action: r.target.action, signature, healthURL: new URL('/', url).href, health,
+            this.event(r.target.key, { running: true, ready: r.ready, action: r.target.action, signature, configurationFingerprintVersion, configurationFingerprints: r.configurationFingerprints, healthURL: new URL('/', url).href, health,
                 state: r.ready ? 'readyz HTTP 200; ChatGPT call remains unverified' : `Health HTTP ${response.status}` });
         }
         catch {
             if (this.running.get(r.target.key) === r)
-                this.event(r.target.key, { running: true, ready: false, action: r.target.action, signature, state: 'Waiting for valid loopback readiness' });
+                this.event(r.target.key, { running: true, ready: false, action: r.target.action, signature, configurationFingerprintVersion, configurationFingerprints: r.configurationFingerprints, state: 'Waiting for valid loopback readiness' });
         }
         finally {
             r.checking = false;

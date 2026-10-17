@@ -83,7 +83,7 @@ struct HarborView: View {
                         Text(externalNotice).font(.caption)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .fixedSize(horizontal: false, vertical: true)
-                        if !store.anyProcessRunning {
+                        if store.initialConfigurationLoaded || !store.anyProcessRunning {
                             Button("载入磁盘版本") {
                                 approve("载入磁盘中最新的配置？这会丢弃当前工作空间尚未保存的本地修改，以磁盘版本替换界面内容。不会启动或重启服务。") {
                                     store.reloadExternalConfiguration(discardLocalChanges: true)
@@ -94,6 +94,38 @@ struct HarborView: View {
                 }
                 if let notice = store.notice, section == .settings || !store.preferences.servers.isEmpty {
                     HStack { Image(systemName: "info.circle"); Text(notice).font(.caption); Spacer(); Button("关闭") { store.notice = nil } }.padding(12).background(Color.accentColor.opacity(0.08))
+                }
+                if !store.configurationApplicationNotices.isEmpty {
+                    DisclosureGroup("已保存配置：\(store.configurationApplicationNotices.count) 项运行状态待处理") {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(store.configurationApplicationNotices) { item in
+                                    HStack {
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Label(item.title, systemImage: "arrow.clockwise.circle").font(.caption.bold()).foregroundStyle(.orange)
+                                            Text(item.detail).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        if item.id.hasPrefix("removed:") {
+                                            Button("停止已移除服务") {
+                                                let id = String(item.id.dropFirst("removed:".count))
+                                                approve("停止已从配置移除、但仍在运行的服务？这会先停止全部隧道，所有远端连接会断开；其他本机 MCP 进程继续运行。") {
+                                                    store.command("stopServer", params: ["serverId": id])
+                                                }
+                                            }
+                                        } else if item.id.hasPrefix("tunnel:") {
+                                            Button("停止此隧道") {
+                                                let key = String(item.id.dropFirst("tunnel:".count))
+                                                approve("停止这条运行中的隧道？使用此隧道的客户端会断开。") { store.stopTunnel(key) }
+                                            }
+                                        }
+                                    }
+                                }
+                                Text("界面显示已保存的新配置；运行实例保持原样。仅在明确停止、再启动相关项目后生效。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }.frame(maxWidth: .infinity, alignment: .leading)
+                        }.frame(maxHeight: 160)
+                    }.padding(12).background(Color.orange.opacity(0.06))
                 }
                 Divider()
                 switch section {
@@ -220,6 +252,10 @@ struct HarborView: View {
                     }.buttonStyle(.glassProminent).disabled(running || !store.gatewayReady)
                     Button("停止", systemImage: "stop.fill") { store.stopServer(server) }.buttonStyle(.glass).disabled(!running)
                 }
+                if !store.serverRestartReasons(server.id).isEmpty {
+                    Label("已保存修改，待重启此 MCP 生效：" + store.serverRestartReasons(server.id).joined(separator: "、"), systemImage: "arrow.clockwise.circle")
+                        .font(.callout).foregroundStyle(.orange)
+                }
                 if !store.gatewayReady {
                     HStack {
                         Label("需要先启动本机网关", systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
@@ -299,6 +335,9 @@ struct HarborView: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(server.name).font(.headline)
                                 Text(serviceStatus(server.id)).font(.caption).foregroundStyle(.secondary)
+                                if !store.serverRestartReasons(server.id).isEmpty {
+                                    Text("待重启生效").font(.caption).foregroundStyle(.orange)
+                                }
                             }.padding(.vertical, 6).tag(server.id)
                         }
                     }.listStyle(.inset)
@@ -410,19 +449,32 @@ struct HarborView: View {
                             .font(.headline).foregroundStyle(store.gatewayReady ? Color.green : Color.primary)
                         Text(store.isAttachedGateway ? "与 AI 共用当前网关。这里的操作会作用于同一实例；退出本应用只断开界面连接。" : (store.gatewayReady ? "返回 MCP 服务，添加或启动你需要的工具。" : store.runtimeSetupSummary))
                             .font(.callout).foregroundStyle(.secondary)
-                        if store.isAttachedGateway {
+                        if store.runtimeComparisonUnavailable {
+                            Text("当前网关版本尚未提供完整逐项配置对比。已保存配置会正常同步；无法确认的项目不会被标为已生效。")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                        if !store.sharedRuntimeServers.isEmpty {
                             ForEach(store.sharedRuntimeServers) { server in
                                 HStack {
                                     VStack(alignment: .leading) {
                                         Text(server.name).font(.subheadline)
-                                        Text("当前实例：\(server.running ? "运行中" : "已停止") · 已授权 \(server.allowedTools.count) 个工具").font(.caption).foregroundStyle(.secondary)
+                                        Text("当前实例：\(server.running ? "运行中" : "已停止") · " + (server.permissionsKnown ? "已授权 \(server.allowedTools.count) 个工具" : "工具授权待核对")).font(.caption).foregroundStyle(.secondary)
                                     }
                                     Spacer()
                                     Button("停止此服务") {
-                                        approve("停止共享实例中的 \(server.name)？使用此服务的 AI 和应用都会受到影响。") {
+                                        approve("停止当前实例中的 \(server.name)？这会先停止全部隧道，所有远端连接会断开；其他本机 MCP 进程继续运行。") {
                                             store.command("stopServer", params: ["serverId": server.id])
                                         }
                                     }.disabled(!server.running)
+                                }
+                            }
+                        }
+                        ForEach(Array(store.runningTunnelKeys).sorted(), id: \.self) { key in
+                            HStack {
+                                Text(key == "aggregate" ? "聚合隧道 · 运行中" : "独立隧道 \(key) · 运行中").font(.caption)
+                                Spacer()
+                                Button("停止此隧道") {
+                                    approve("停止这条运行中的隧道？使用此隧道的客户端会断开。") { store.stopTunnel(key) }
                                 }
                             }
                         }
@@ -511,6 +563,10 @@ struct HarborView: View {
         let usesExistingFile = server == nil && !(store.preferences.aggregateProfileFile?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
         return GroupBox(server == nil ? "聚合隧道" : "独立隧道") {
             VStack(alignment: .leading, spacing: 12) {
+                if !store.tunnelRestartReasons(key).isEmpty {
+                    Label("已保存修改，待重启隧道生效：" + store.tunnelRestartReasons(key).joined(separator: "、"), systemImage: "arrow.clockwise.circle")
+                        .font(.callout).foregroundStyle(.orange)
+                }
                 if let index {
                     TextField("Tunnel ID", text: $store.preferences.servers[index].tunnelID).disabled(store.tunnelRunning(key))
                     TextField("连接配置名称（字母、数字、短横线）", text: $store.preferences.servers[index].profile).disabled(store.tunnelRunning(key))

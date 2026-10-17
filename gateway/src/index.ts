@@ -1,6 +1,7 @@
 import {boundRuntimeSnapshot} from './runtime-snapshot.js';
 import {ConnectionJournal} from './connection-events.js';
 import { RequestJournal } from './request-journal.js';
+import { configurationFingerprintVersion, ConfigurationFingerprints, gatewayConfigurationFingerprints, serverConfigurationFingerprints } from './configuration-fingerprints.js';
 /** Original MCP Harbor gateway. Loopback-only; real macOS/tunnel integration requires user acceptance. */
 import http, { IncomingMessage, ServerResponse } from 'node:http';
 import { createHash, randomUUID } from 'node:crypto';
@@ -19,6 +20,7 @@ import { ListToolsRequestSchema, CallToolRequestSchema, ToolListChangedNotificat
 type Config = { id: string; name: string; executable: string; arguments: string[];
   environment: Record<string, string>; workingDirectory?: string; allowedTools: string[] };
 type Managed = { config: Config; client: Client; transport: StdioClientTransport; tools: Tool[];
+  configurationFingerprints: ConfigurationFingerprints;
   ready: boolean; closing: boolean; calls: number; revision: number; catalogRevision: number; lifetime: AbortController;
   discovery?: Promise<Tool[]>; stopping?: Promise<void> };
 
@@ -30,6 +32,8 @@ let inflight = 0;
 const portIndex = process.argv.indexOf('--port');
 const port = portIndex >= 0 ? Number(process.argv[portIndex + 1]) : 8787;
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid loopback port');
+// Freeze actual startup settings. Saved-file edits never mutate these values.
+const configurationFingerprints = gatewayConfigurationFingerprints(process.execPath, process.argv[1] ?? '', port);
 const recentEvents: Array<{sequence:number; event:object}> = [];
 let eventSequence = 0;
 const connectionJournal = new ConnectionJournal();
@@ -158,7 +162,7 @@ async function start(raw: unknown): Promise<void> {
   const transport = new StdioClientTransport({ command: config.executable, args: config.arguments,
     env: config.environment, cwd: config.workingDirectory || undefined, stderr: 'pipe', maxBufferSize: 4 * 1024 * 1024 });
   const client = new Client({ name: 'mcp-harbor', version: '0.1.0' }, { capabilities: {} });
-  const m: Managed = { config, transport, client, tools: [], ready: false, closing: false, calls: 0, revision: 0, catalogRevision: -1, lifetime: new AbortController() };
+  const m: Managed = { config, configurationFingerprints: serverConfigurationFingerprints(config), transport, client, tools: [], ready: false, closing: false, calls: 0, revision: 0, catalogRevision: -1, lifetime: new AbortController() };
   // Never forward raw upstream payloads, credentials or tool arguments to UI logs.
   let lastStderrReport = 0;
   transport.stderr?.on('data', () => {
@@ -191,7 +195,7 @@ async function start(raw: unknown): Promise<void> {
     await discover(m);
     if (!isCurrent(m)) throw new Error('Server stopped during startup');
     m.ready = true;
-    emit({ type: 'serverStatus', serverId: config.id, status: 'running' });
+    emit({ type: 'serverStatus', serverId: config.id, name: config.name, allowedTools: config.allowedTools, status: 'running', configurationFingerprintVersion, configurationFingerprints: m.configurationFingerprints });
     emitTools(m);
   } catch (error) {
     await stopManaged(m);
@@ -323,7 +327,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
 httpServer.requestTimeout = 70000;
 httpServer.headersTimeout = 10000;
 httpServer.on('error', error => { emit({ type: 'log', message: safeMessage(error) }); void shutdown(1); });
-httpServer.listen(port, '127.0.0.1', () => { if (!closing) emit({ type: 'ready', port }); });
+httpServer.listen(port, '127.0.0.1', () => { if (!closing) emit({ type: 'ready', port, configurationFingerprintVersion, configurationFingerprints }); });
 
 const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
 lines.on('line', line => {
@@ -344,8 +348,8 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
       return rawID;
     };
     switch (command.method) {
-      case 'status': case 'snapshot': { const snapshot = { protocolVersion: 1, instanceID, controlRoot, pid: process.pid, port, workspaceID,
-        servers: [...managed.values()].map(m => ({ id: m.config.id, name: m.config.name, running: m.ready, allowedTools: m.config.allowedTools, toolCount: m.tools.length, ...(command.method === 'snapshot' ? {tools: m.tools.map(t => ({...t, publicName: publicName(m.config.id,t.name)}))} : {}) })),
+      case 'status': case 'snapshot': { const snapshot = { protocolVersion: 1, instanceID, controlRoot, pid: process.pid, port, workspaceID, configurationFingerprintVersion, configurationFingerprints,
+        servers: [...managed.values()].map(m => ({ id: m.config.id, name: m.config.name, running: m.ready, allowedTools: m.config.allowedTools, toolCount: m.tools.length, configurationFingerprintVersion, configurationFingerprints: m.configurationFingerprints, ...(command.method === 'snapshot' ? {tools: m.tools.map(t => ({...t, publicName: publicName(m.config.id,t.name)}))} : {}) })),
         ...(command.method === 'snapshot' ? {events: recentEvents, sequence: eventSequence, requests: requestJournal.snapshot(), connectionEvents: connectionJournal.snapshot()} : {}),
         tunnels: tunnelManager.snapshot() };
         result = command.method === 'snapshot' ? boundRuntimeSnapshot(snapshot) : snapshot;
