@@ -83,3 +83,21 @@ final class StartAllTests: XCTestCase {
         XCTAssertFalse(store.startAllBusy)
     }
 }
+
+
+extension StartAllTests {
+    @MainActor func testCloudflareChoiceDoesNotRequireOpenAITunnelOrKey() async {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = HarborStore(configurationFileURL: root.appendingPathComponent("settings.json"), startWatcher: false)
+        store.preferences.remoteConnection = RemoteConnectionSettings(preferredTransport: "cloudflare")
+        store.savedPreferences = store.preferences
+        store.isAttachedGateway = true; store.gatewayState = "Ready · loopback only"
+        XCTAssertTrue(store.startAllConfirmation.contains("Cloudflare"))
+        store.startAll()
+        await store.startAllTask?.value
+        XCTAssertNotNil(store.startAllSteps.first(where: { $0.id == "tunnel:transport:cloudflare" }))
+        XCTAssertNil(store.startAllSteps.first(where: { $0.id == "tunnel:aggregate" }))
+        XCTAssertTrue(store.pendingCommands.isEmpty)
+    }
+}

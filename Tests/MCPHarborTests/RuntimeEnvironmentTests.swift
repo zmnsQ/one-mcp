@@ -25,3 +25,15 @@ final class RuntimeEnvironmentTests: XCTestCase {
         XCTAssertFalse(RuntimeEnvironment.missingFiles(for: "").isEmpty)
     }
 }
+
+
+extension RuntimeEnvironmentTests {
+    func testRemoteConnectionComponentsAreRequiredInBundle() {
+        let script = current.appendingPathComponent("gateway/dist/index.js").path
+        for file in ["remote-auth.js", "cloudflare.js"] {
+            let missing = RuntimeEnvironment.missingFiles(for: script, readable: { !$0.hasSuffix("/" + file) })
+            XCTAssertEqual(missing.count, 1)
+            XCTAssertTrue(missing[0].hasSuffix("/" + file))
+        }
+    }
+}

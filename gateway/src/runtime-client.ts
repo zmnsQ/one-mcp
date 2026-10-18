@@ -18,7 +18,7 @@ export class RuntimeClient {
   }
   async command(method:string,params:Record<string,unknown>={}) {
     if (!this.identity) throw new Error('Gateway has not been attached');
-    if (!['startServer','stopServer','listTools','tunnelAction','stopTunnel','stopAllTunnels','shutdown'].includes(method)) throw new Error('Unsupported shared command');
+    if (!['startServer','stopServer','listTools','tunnelAction','cloudflareAction','stopTunnel','stopAllTunnels','shutdown'].includes(method)) throw new Error('Unsupported shared command');
     return this.rpc(method,{...params,expectedInstanceID:this.identity.instanceID});
   }
 }
@@ -34,3 +34,4 @@ export function sharedDisconnectReason(error: unknown): string {
   if (/permissions or owner/.test(message)) return 'unsafe-socket';
   return 'connection-lost';
 }
+

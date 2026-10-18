@@ -1,3 +1,7 @@
+import { workspace, readJSON, preferencesSchema } from './configuration.js';
+import { RemoteAuth } from './remote-auth.js';
+import { CloudflareTunnelManager } from './cloudflare.js';
+import { configurationFingerprint } from './configuration-fingerprints.js';
 import {boundRuntimeSnapshot} from './runtime-snapshot.js';
 import {ConnectionJournal} from './connection-events.js';
 import { RequestJournal } from './request-journal.js';
@@ -59,6 +63,31 @@ const workspaceIndex = process.argv.indexOf('--workspace-id');
 const workspaceID = workspaceIndex >= 0 ? process.argv[workspaceIndex + 1] : 'default';
 const instanceID = randomUUID();
 const controlRoot = controlIndex >= 0 ? realpathSync(dirname(dirname(process.argv[controlIndex + 1] ?? ''))) : null;
+// Freeze the saved security policy at startup. A saved edit requires an explicit restart.
+const settingsIndex = process.argv.indexOf('--settings-file');
+const settingsFile = settingsIndex >= 0 ? process.argv[settingsIndex + 1] : undefined;
+if (settingsIndex >= 0 && (!settingsFile || !isAbsolute(settingsFile))) throw new Error('Settings file must be absolute');
+const startupPreferences = controlRoot ? (await workspace(controlRoot, workspaceID)).config :
+  settingsFile ? preferencesSchema.parse((await readJSON(settingsFile)).data) : undefined;
+const savedOAuth = startupPreferences?.remoteConnection?.oauth;
+const remoteAuth = new RemoteAuth(savedOAuth?.enabled ? savedOAuth : undefined);
+const oauthFields = remoteAuth.snapshot();
+const savedOAuthFields = savedOAuth ?? oauthFields;
+Object.assign(configurationFingerprints, {
+  oauthEnabled: configurationFingerprint([String(savedOAuthFields.enabled)]),
+  oauthPublicURL: configurationFingerprint([savedOAuthFields.publicURL]),
+  oauthIssuer: configurationFingerprint([savedOAuthFields.issuer]),
+  oauthJWKSURL: configurationFingerprint([savedOAuthFields.jwksURL]),
+  oauthScope: configurationFingerprint([savedOAuthFields.scope])
+});
+const cloudflareManager = new CloudflareTunnelManager(port, emit, {
+  isActive: () => remoteAuth.snapshot().enabled,
+  expectedIssuer: () => remoteAuth.snapshot().issuer,
+  expectedScopes: () => remoteAuth.snapshot().scope.split(' '),
+  setPublicOrigin: origin => {
+    remoteAuth.configure(origin ? {...oauthFields, publicURL: origin + '/mcp'} : oauthFields);
+  }
+});
 let closeControl: (() => Promise<void>) | undefined;
 let chain = Promise.resolve();
 function dispatch(command: ControlRequest): Promise<ControlResponse> {
@@ -245,7 +274,9 @@ function body(req: IncomingMessage): Promise<unknown> {
 }
 function allowedHost(req: IncomingMessage): boolean {
   const host = req.headers.host?.toLowerCase();
-  return host === `127.0.0.1:${port}` || host === `localhost:${port}`;
+  if (host === `127.0.0.1:${port}` || host === `localhost:${port}`) return true;
+  const auth = remoteAuth.snapshot();
+  return auth.enabled && host === new URL(auth.publicURL).host.toLowerCase();
 }
 const httpServer = http.createServer((req, res) => {
   void handleHttp(req, res).catch(() => { if (!res.headersSent) json(res, 500, { error: 'MCP request failed' }); else res.destroy(); });
@@ -255,19 +286,23 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
   trace.stage("lifecycle");
   if (closing) return json(res, 503, { error: 'Shutting down' });
   trace.stage("host");
-  if (!allowedHost(req)) return json(res, 403, { error: 'Only local Host headers accepted' });
+  if (!allowedHost(req)) return json(res, 403, { error: 'Host is not configured' });
   // Reject even an empty Origin header. Never expose an unauthenticated browser endpoint.
   trace.stage("origin");
   if (req.headers.origin !== undefined) return json(res, 403, { error: 'Browser Origin requests are not allowed' });
+  if (remoteAuth.handleMetadata(req, res)) { trace.ignore(); return; }
   trace.stage("path");
   let path: string;
   try {
     if (!req.url?.startsWith('/') || req.url.startsWith('//')) throw new Error('Invalid path');
     path = new URL(req.url, 'http://127.0.0.1').pathname;
   } catch { return json(res, 400, { error: 'Invalid request target' }); }
+  if (path !== '/health' || ![`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host ?? '')) {
+    if (!await remoteAuth.authorize(req, res)) return;
+  }
   if (path === '/health' && req.method === 'GET') { trace.ignore(); return json(res, 200, { status: 'ready', managedServers: [...managed.values()].filter(m => m.ready).length }); }
   const individual = /^\/servers\/([A-Za-z0-9_-]{1,64})\/mcp$/.exec(path);
-  if (path !== '/mcp' && !individual) return json(res, 404, { error: 'Unknown endpoint' });
+  if ((remoteAuth.snapshot().enabled && individual) || (path !== '/mcp' && !individual)) return json(res, 404, { error: 'Unknown endpoint' });
   trace.route(!!individual);
   const serverId = individual?.[1];
   if (serverId && !managed.get(serverId)?.ready) return json(res, 404, { error: 'Server is not running' });
@@ -351,11 +386,11 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
       case 'status': case 'snapshot': { const snapshot = { protocolVersion: 1, instanceID, controlRoot, pid: process.pid, port, workspaceID, configurationFingerprintVersion, configurationFingerprints,
         servers: [...managed.values()].map(m => ({ id: m.config.id, name: m.config.name, running: m.ready, allowedTools: m.config.allowedTools, toolCount: m.tools.length, configurationFingerprintVersion, configurationFingerprints: m.configurationFingerprints, ...(command.method === 'snapshot' ? {tools: m.tools.map(t => ({...t, publicName: publicName(m.config.id,t.name)}))} : {}) })),
         ...(command.method === 'snapshot' ? {events: recentEvents, sequence: eventSequence, requests: requestJournal.snapshot(), connectionEvents: connectionJournal.snapshot()} : {}),
-        tunnels: tunnelManager.snapshot() };
+        tunnels: [...tunnelManager.snapshot(), ...cloudflareManager.snapshot()] };
         result = command.method === 'snapshot' ? boundRuntimeSnapshot(snapshot) : snapshot;
         break; }
       case 'startServer': await start(command.params?.server); break;
-      case 'stopServer': { const id = requireID(); await tunnelManager.stopAll(); await stop(id); break; }
+      case 'stopServer': { const id = requireID(); await cloudflareManager.stopAll(); await tunnelManager.stopAll(); await stop(id); break; }
       case 'listTools': {
         const m = managed.get(requireID());
         if (!m?.ready) throw new Error('Server is not running');
@@ -363,12 +398,20 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
         result = m.tools.map(t => ({ ...t, allowed: m.config.allowedTools.includes(t.name), publicName: publicName(m.config.id, t.name) })); break;
       }
       case 'tunnelAction': result = await tunnelManager.action(command.params); break;
+      case 'cloudflareAction': {
+        if (command.params?.action === 'run' && command.params?.mode === 'named' &&
+            String(command.params?.publicURL ?? '').replace(/\/$/, '') + '/mcp' !== oauthFields.publicURL) {
+          throw new Error('Cloudflare public URL must match the saved OAuth resource URL; save and restart first');
+        }
+        const {expectedInstanceID: _instance, ...parameters} = command.params ?? {};
+        result = await cloudflareManager.action(parameters); break;
+      }
       case 'stopTunnel': {
         const key = command.params?.key;
-        if (typeof key !== 'string' || !/^[\w-]{1,64}$/.test(key)) throw new Error('Invalid tunnel key');
-        await tunnelManager.stop(key); break;
+        if (typeof key !== 'string' || (key !== 'transport:cloudflare' && !/^[\w-]{1,64}$/.test(key))) throw new Error('Invalid tunnel key');
+        if (key === 'transport:cloudflare') await cloudflareManager.stop(); else await tunnelManager.stop(key); break;
       }
-      case 'stopAllTunnels': await tunnelManager.stopAll(); break;
+      case 'stopAllTunnels': await cloudflareManager.stopAll(); await tunnelManager.stopAll(); break;
       case 'shutdown': setTimeout(() => { void shutdown(0); }, 100); break;
       default: throw new Error('Unknown management method');
     }
@@ -387,7 +430,7 @@ async function shutdown(code = 0): Promise<void> {
   httpServer.close();
   const forceExit = setTimeout(() => { httpServer.closeAllConnections(); process.exit(code); }, 8000);
   forceExit.unref();
-  await tunnelManager.stopAll();
+  await cloudflareManager.stopAll(); await tunnelManager.stopAll();
   await closeControl?.();
   await Promise.all([...activeRequests].map(bridge => bridge.close().catch(() => undefined)));
   await Promise.all([...managed.values()].map(m => stopManaged(m).catch(() => undefined)));
@@ -398,3 +441,4 @@ async function shutdown(code = 0): Promise<void> {
 lines.on('close', () => { if (!closing) void shutdown(); });
 process.once('SIGTERM', () => { void shutdown(); });
 process.once('SIGINT', () => { void shutdown(); });
+

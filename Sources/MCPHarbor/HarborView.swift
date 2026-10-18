@@ -245,7 +245,7 @@ struct HarborView: View {
                 }
             }.buttonStyle(.glassProminent)
                 .disabled(store.startAllBusy || store.takeoverBusy || store.hasUnsavedChanges)
-                .help(store.hasUnsavedChanges ? "请先保存修改，再全部启动" : "依次启动网关、参与的 MCP 和当前路由模式的已配置隧道")
+                .help(store.hasUnsavedChanges ? "请先保存修改，再全部启动" : "依次启动网关、参与的 MCP 和所选方式的已有连接")
             if store.isGatewayRunning {
                 Button("停止网关", systemImage: "stop.fill") {
                     approve("停止此共享网关及其连接？所有连接到该实例的 AI 和应用都会受到影响。") { store.stopGateway() }
@@ -387,8 +387,8 @@ struct HarborView: View {
     private var tunnelSettings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                MCPRequestTracePanel().environmentObject(store)
-                GroupBox("出口方式") {
+                TunnelOnboardingGuide().environmentObject(store)
+                GroupBox("路由方式") {
                     Picker("路由模式", selection: $store.preferences.mode) {
                         Text("聚合 · 一个隧道").tag("aggregate")
                         Text("独立 · 每个 MCP 一个隧道").tag("individual")
@@ -399,10 +399,18 @@ struct HarborView: View {
                     Label("先点击顶部“启动网关”，再创建或复用下方连接配置。", systemImage: "info.circle")
                         .font(.callout).foregroundStyle(.secondary)
                 }
-                GroupBox("官方隧道客户端") {
+                GroupBox("2 · 安装客户端，准备运行密钥") {
+                    VStack(alignment: .leading, spacing: 14) {
+                        TunnelAccountGuide()
+                        Divider()
+                        Link("安装官方 tunnel-client", destination: TunnelHelp.installation)
+                        Text("从官方入口安装后，选择本机可执行文件。打开页面不会自动安装、创建密钥或启动连接。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.padding(12)
                     Form {
                         HStack { TextField("tunnel-client 绝对路径", text: $store.preferences.tunnelClientPath); Button("选择") { store.choosePath("tunnel") } }
-                        SecureField("Runtime API Key（已有文件凭据可留空）", text: $store.tunnelKey)
+                        SecureField("Runtime API Key（已有 Profile 凭据可留空）", text: $store.tunnelKey)
+                        Text(TunnelSetupHints.credential(store.tunnelKey)).font(.caption).foregroundStyle(.secondary)
                         HStack {
                             Button("保存并自动填入") {
                                 approve("将当前 Runtime API Key 保存到此 Mac 的系统钥匙串，并允许以后打开本工作空间时自动填入？不会写入配置、导出文件或日志。") { store.saveAndRememberTunnelKey() }
@@ -415,8 +423,6 @@ struct HarborView: View {
                         Text(store.tunnelCredentialStatus).font(.caption).foregroundStyle(.secondary)
                         Text("已有 Profile 的 file: 或内置凭据由官方客户端自行使用，留空不会覆盖。若 Profile 依赖 env:CONTROL_PLANE_API_KEY，请在这里提供本次值。不会自动读取或复制 Profile 文件内的凭据。").font(.caption).foregroundStyle(.secondary)
                     }.formStyle(.grouped)
-                    Text("需已有 tunnel、Platform Read + Use 权限及正确的 ChatGPT 工作区关联。密钥和隧道由你自行创建。").font(.caption).foregroundStyle(.secondary).padding(10)
-                    HStack { Link("安装官方 tunnel-client", destination: URL(string: "https://github.com/openai/tunnel-client#readme")!); Link("Platform 隧道设置", destination: URL(string: "https://platform.openai.com/settings/organization/tunnels")!); Link("官方配置文档", destination: URL(string: "https://developers.openai.com/api/docs/guides/secure-mcp-tunnels")!); Link("ChatGPT Plugins", destination: URL(string: "https://chatgpt.com/plugins")!) }.padding(10)
                 }
                 if store.preferences.mode == "aggregate" {
                     tunnelPanel(server: nil, index: nil)
@@ -427,6 +433,11 @@ struct HarborView: View {
                     } else {
                         ContentUnavailableView("先添加服务器", systemImage: "network", description: Text("独立模式为每个 MCP 配置自己的隧道。"))
                     }
+                }
+                TunnelVerificationGuide()
+                RemoteConnectionSettingsView().environmentObject(store)
+                DisclosureGroup("连接日志与请求观测") {
+                    MCPRequestTracePanel().environmentObject(store)
                 }
             }.padding(24)
         }
@@ -501,7 +512,7 @@ struct HarborView: View {
                         }
                         ForEach(Array(store.runningTunnelKeys).sorted(), id: \.self) { key in
                             HStack {
-                                Text(key == "aggregate" ? "聚合隧道 · 运行中" : "独立隧道 \(key) · 运行中").font(.caption)
+                                Text(key == "transport:cloudflare" ? "Cloudflare · 运行中" : key == "aggregate" ? "聚合隧道 · 运行中" : "独立隧道 \(key) · 运行中").font(.caption)
                                 Spacer()
                                 Button("停止此隧道") {
                                     approve("停止这条运行中的隧道？使用此隧道的客户端会断开。") { store.stopTunnel(key) }
@@ -591,7 +602,7 @@ struct HarborView: View {
     private func tunnelPanel(server: ServerConfig?, index: Int?) -> some View {
         let key = server?.id ?? "aggregate"
         let usesExistingFile = server == nil && !(store.preferences.aggregateProfileFile?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        return GroupBox(server == nil ? "聚合隧道" : "独立隧道") {
+        return GroupBox(server == nil ? "3 · 检查并启动聚合隧道" : "3 · 检查并启动独立隧道") {
             VStack(alignment: .leading, spacing: 12) {
                 if !store.tunnelRestartReasons(key).isEmpty {
                     Label("已保存修改，待重启隧道生效：" + store.tunnelRestartReasons(key).joined(separator: "、"), systemImage: "arrow.clockwise.circle")
@@ -604,6 +615,8 @@ struct HarborView: View {
                     TextField("Tunnel ID", text: $store.preferences.aggregateTunnelID).disabled(store.tunnelRunning(key))
                     TextField("连接配置名称（字母、数字、短横线）", text: $store.preferences.aggregateProfile).disabled(store.tunnelRunning(key))
                 }
+                Text(TunnelSetupHints.tunnel(server?.tunnelID ?? store.preferences.aggregateTunnelID))
+                    .font(.caption).foregroundStyle(.secondary)
                 if server == nil {
                     if let file = store.preferences.aggregateProfileFile, !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                         Text("使用已有文件：\(file)").font(.caption).textSelection(.enabled)
@@ -650,3 +663,4 @@ struct HarborView: View {
         }.padding(14).background(.background.secondary)
     }
 }
+

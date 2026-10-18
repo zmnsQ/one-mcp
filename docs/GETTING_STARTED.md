@@ -64,3 +64,8 @@ A local diagnostic adds an untrusted filtering marker; this is not proof of requ
 The ChatGPT connection page now has an always-visible live log panel with search, category/error filters, error-first ordering and expandable per-event details. **复制连接诊断** copies all retained records; **导出日志…** asks for a destination with the macOS save dialog. Filters affect the view, not the exported report. The schema-versioned JSON contains up to 80 request records and 200 projected lifecycle records, scoped to the running gateway and cleared from the app on disconnect/workspace switch. Shared clients see the same runtime journal.
 
 Lifecycle records include gateway readiness, MCP service state, discovery counts and tunnel init/doctor/run state/exit codes. Known tunnel failures have fixed explanatory messages; arbitrary subprocess stdout/stderr, target paths, credentials, arguments and output bodies are intentionally not exported. These are diagnostic metadata, not full official-client raw logs. The official health panel remains the source for component-level historical observations. Request timestamps and locally generated IDs help correlate stages but cannot authenticate a remote caller. A successful HTTP response does not prove a tool result succeeded.
+
+
+## Remote access
+
+Follow [Remote connection setup](REMOTE_CONNECTIONS.zh-CN.md) for the in-app API Key guide, external OAuth prerequisites and Cloudflare modes. Credentials are never part of shared configuration.

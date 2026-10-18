@@ -21,3 +21,8 @@ Use the exact Node + CLI command supplied by the app’s “让 AI 管理 One MC
 - Allowlist only named tools explicitly requested. Never use wildcards or add permissions to make an error disappear.
 - Tunnel initialization can create persistent configuration; opening external access and using credentials need the applicable user approval. Never create keys or purchase services.
 - Never claim native Swift compilation, actual tunnel access or end-to-end ChatGPT success based on Linux fixture tests.
+
+
+## Remote connections
+
+Read `docs/REMOTE_CONNECTIONS.zh-CN.md` before configuring remote access. `remoteConnection` settings contain public metadata and file paths only. Never store keys or tokens in configuration. `onemcp cloudflare doctor|start|stop` defaults to preview; `--apply` is explicit. Cloudflare startup requires saved OAuth settings to match the running gateway policy. Public exposure needs user approval; do not create credentials, OAuth grants or Cloudflare resources implicitly. Use `transport:cloudflare` as the reserved runtime target; it is separate from MCP server IDs.

@@ -51,6 +51,7 @@ import AppKit
     var shownTunnelFailures: [String: String] = [:]
     @Published var tunnelProfileLocations: [String: String] = [:]
     @Published var tunnelStates: [String: String] = [:]
+    @Published var cloudflarePublicURL: String?
     @Published var tools: [String: [ToolInfo]] = [:]
     @Published var logs: [LogLine] = []
     @Published var errorMessage: String?
@@ -98,6 +99,9 @@ import AppKit
         guard savedRevision == configurationRevision() else { errorMessage = "AI 或另一窗口已更新配置。当前修改已保留，请先核对外部更新，避免覆盖。"; return false }
         guard storageReadable else { errorMessage = "配置文件损坏，禁止覆盖。请先导入有效配置或创建新工作空间。"; return false }
         do {
+            if let issue = RemoteConnectionValidation.issue(preferences.remoteConnection) {
+                throw NSError(domain: "OneMCP", code: 12, userInfo: [NSLocalizedDescriptionKey: issue])
+            }
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try FileManager.default.createDirectory(at: workspaceDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -141,7 +145,7 @@ import AppKit
         clearPendingCommands()
         detachSharedGateway() // Discard only a failed adapter, never stop the shared gateway.
         clearAppliedConfiguration(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []
-        tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]
+        tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil
         requestTraces = []; connectionEvents = []
         resolveRuntimePaths()
         guard runtimeFilesReady else { errorMessage = runtimeSetupSummary; checkSetup(); return }
@@ -205,7 +209,7 @@ import AppKit
             self.clearAppliedConfiguration(); self.sharedRuntimeServers = []; self.attachedPort = nil
             self.clearPendingCommands()
             self.runningTunnelKeys.removeAll()
-            self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.requestTraces = []; self.connectionEvents = []
+            self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.cloudflarePublicURL = nil; self.requestTraces = []; self.connectionEvents = []
             for id in Array(self.states.keys) { self.states[id] = "stopped" }
             self.stopAllTunnels()
         }
@@ -249,7 +253,7 @@ import AppKit
             notice = event["message"] as? String
             runtimeBridge?.stop()
             isAttachedGateway = false; gatewayState = "Disconnected"; attachedPort = nil
-            clearPendingCommands(); clearAppliedConfiguration(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; requestTraces = []; self.connectionEvents = []
+            clearPendingCommands(); clearAppliedConfiguration(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil; requestTraces = []; self.connectionEvents = []
         case "response":
             if let requestID = event["id"] as? String {
                 if commandResults.count > 100 { commandResults = [:] }
@@ -280,6 +284,10 @@ import AppKit
                 tunnelHealthSnapshots[key] = (event["running"] as? Bool == true) ? TunnelHealthSnapshot(event["health"] as? [String: Any]) : nil
                 tunnelHealthURLs[key] = (event["running"] as? Bool == true) ? TunnelDashboardURL.validated(event["healthURL"] as? String) : nil
                 tunnelStates[key] = event["state"] as? String ?? "状态已更新"
+                if key == "transport:cloudflare" {
+                    cloudflarePublicURL = (event["running"] as? Bool == true)
+                        ? (event["mcpURL"] as? String).flatMap { RemoteConnectionValidation.publicHTTPS($0)?.absoluteString } : nil
+                }
                 if event["running"] as? Bool == true { shownTunnelFailures[key] = nil }
                 if let code = event["errorCode"] as? String, let message = event["message"] as? String {
                     let identity = (event["signature"] as? String ?? "") + code
@@ -433,3 +441,4 @@ import AppKit
         stopAllTunnels(); stopGateway()
     }
 }
+

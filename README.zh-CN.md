@@ -76,3 +76,8 @@ AI / CLI 保存配置后，界面会在下一次自动检查（约1秒）同步�
 顶部“全部启动”在一次明确确认后，依次启动/连接网关、参与的 MCP 服务，以及当前路由模式对应的已有隧道配置。服务编辑页的“参与全部启动”默认开启；关闭只排除批量启动，不影响手动启动或正在运行的服务。
 
 先保存编辑再启动。已运行项和待确认操作不会重复提交；已保存但尚未应用的配置仍显示“待重启”。每项会显示结果，取消只停止后续提交，已启动服务不会回滚。修正缺失程序、会话环境变量或隧道配置后，再点“全部启动”可重试未启动项。它不创建 profile、不初始化凭据、不修改工具白名单；隧道进程启动不等于 ChatGPT 端到端连接验证通过。
+
+
+## Remote connection setup / 远程连接设置
+
+The app includes staged OpenAI Tunnel onboarding, external OAuth resource-server protection, and Cloudflare Tunnel management. See [setup, security boundaries and compatibility](docs/REMOTE_CONNECTIONS.zh-CN.md). Real macOS and provider-account acceptance testing is required before production use.

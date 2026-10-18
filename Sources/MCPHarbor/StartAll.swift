@@ -10,6 +10,9 @@ struct StartAllStep: Identifiable {
 @MainActor extension HarborStore {
     var startAllConfirmation: String {
         let selected = preferences.servers.filter(\.participatesInStartAll).map(\.name).joined(separator: "、")
+        if preferences.remoteConnection?.preferredTransport == "cloudflare" {
+            return "启动网关、MCP（\(selected.isEmpty ? "无" : selected)）和 Cloudflare 公网连接？白名单工具将通过 Cloudflare 提供给获 OAuth 授权的客户端，数据与结果经过 Cloudflare。MCP 程序具有你账户的文件与服务权限。已运行项保持原样，待重启配置不会自动应用；不会创建账号、密钥或隧道。"
+        }
         let targets = preferences.mode == "aggregate" ? "已配置的聚合隧道（包含此网关当前全部白名单工具）" : "参与全部启动的 MCP 对应已配置隧道"
         return "启动网关、MCP（\(selected.isEmpty ? "无" : selected)）及\(targets)？MCP 程序具有你账户的文件与服务权限。隧道会将白名单工具接入所配置的 OpenAI 工作区，数据与结果会发送到 OpenAI。已运行项保持原样，待重启配置不会自动应用；不会创建 profile、密钥或修改白名单。"
     }
@@ -26,7 +29,7 @@ struct StartAllStep: Identifiable {
         } else if event["running"] as? Bool == false {
             updateStartAll("tunnel:" + key, "failed", "隧道已退出；请在连接日志检查原因，修正后可再次全部启动")
         } else if event["ready"] as? Bool == true {
-            updateStartAll("tunnel:" + key, "succeeded", "隧道连接已就绪；ChatGPT 端到端调用仍需验证")
+            updateStartAll("tunnel:" + key, "succeeded", key == "transport:cloudflare" ? "Cloudflare 元数据可达；OAuth 登录和工具调用仍需验证" : "隧道连接已就绪；ChatGPT 端到端调用仍需验证")
         }
     }
     func cancelStartAll() {
@@ -55,7 +58,8 @@ struct StartAllStep: Identifiable {
         startAllRevision = savedRevision
         startAllSteps = [.init(id: "gateway", title: "本机网关")]
         startAllSteps += plan.servers.map { .init(id: "server:" + $0.id, title: $0.name) }
-        if plan.mode == "aggregate" { startAllSteps.append(.init(id: "tunnel:aggregate", title: "聚合隧道")) }
+        if plan.remoteConnection?.preferredTransport == "cloudflare" { startAllSteps.append(.init(id: "tunnel:transport:cloudflare", title: "Cloudflare 公网连接")) }
+        else if plan.mode == "aggregate" { startAllSteps.append(.init(id: "tunnel:aggregate", title: "聚合隧道")) }
         else { startAllSteps += plan.servers.filter(\.participatesInStartAll).map { .init(id: "tunnel:" + $0.id, title: $0.name + " 隧道") } }
         startAllBusy = true
         startAllTask = Task { @MainActor [weak self] in
@@ -126,6 +130,10 @@ struct StartAllStep: Identifiable {
                            finished && result == "ok" ? "MCP 已运行" : (result.flatMap { $0 == "ok" ? nil : $0 } ?? "未确认启动结果；不自动重发，请查看实际状态"))
         }
         guard bulkContextIsCurrent(plan, workspace), gatewayReady else { return }
+        if plan.remoteConnection?.preferredTransport == "cloudflare" {
+            await runBulkCloudflare(plan: plan, workspace: workspace)
+            return
+        }
         let targets: [ServerConfig?] = plan.mode == "aggregate" ? [nil] : plan.servers.filter(\.participatesInStartAll).map { Optional($0) }
         for server in targets {
             guard bulkContextIsCurrent(plan, workspace), gatewayReady else { return }
@@ -149,6 +157,31 @@ struct StartAllStep: Identifiable {
                            finished && result == "ok" ? (tunnelReady[target] == true ? "隧道连接已就绪；ChatGPT 调用仍需验证" : "隧道进程已启动；连接尚未就绪，请查看连接状态") : (result.flatMap { $0 == "ok" ? nil : $0 } ?? "未确认隧道启动结果；不自动重发"))
         }
     }
+    private func runBulkCloudflare(plan: Preferences, workspace: String) async {
+        let key = "tunnel:transport:cloudflare"
+        guard bulkContextIsCurrent(plan, workspace), gatewayReady else { return }
+        if tunnelRunning("transport:cloudflare") || hasPendingCommand(for: "transport:cloudflare") {
+            updateStartAll(key, "skipped", "Cloudflare 已运行或有操作待确认，未重复提交"); return
+        }
+        guard plan.servers.contains(where: { $0.participatesInStartAll && states[$0.id] == "running" }) else {
+            updateStartAll(key, "skipped", "没有已运行的参与 MCP，未发布公网连接"); return
+        }
+        updateStartAll(key, "starting", "正在检查 OAuth 并启动已有 Cloudflare 配置")
+        let before = Set(pendingCommands.keys)
+        guard submitBulkCommand(plan, workspace, action: { self.cloudflareAction("run", persistConfiguration: false) }),
+              let request = Set(pendingCommands.keys).subtracting(before).first else {
+            updateStartAll(key, "failed", errorMessage ?? "Cloudflare 启动请求未提交"); return
+        }
+        let finished = await waitForBulk(plan, workspace, until: {
+            self.commandResults[request] != nil && (self.commandResults[request] != "ok" || self.tunnelRunning("transport:cloudflare") || self.startAllSteps.first(where: { $0.id == key })?.status == "failed")
+        })
+        guard !Task.isCancelled else { return }
+        let result = commandResults.removeValue(forKey: request)
+        if startAllSteps.first(where: { $0.id == key })?.status == "failed" { return }
+        updateStartAll(key, finished && result == "ok" ? "succeeded" : "failed",
+            finished && result == "ok" ? "Cloudflare 进程已启动；公网元数据、OAuth 登录和工具调用请分别验收" :
+                (result.flatMap { $0 == "ok" ? nil : $0 } ?? "未确认 Cloudflare 启动结果；不自动重发"))
+    }
     private func bulkTunnelPreflight(_ server: ServerConfig?, plan: Preferences) -> String? {
         let tunnel = server?.tunnelID ?? plan.aggregateTunnelID
         guard tunnel.range(of: "^tunnel_[A-Za-z0-9_-]+$", options: .regularExpression) != nil else { return "缺少有效 Tunnel ID" }
@@ -162,3 +195,4 @@ struct StartAllStep: Identifiable {
         return nil
     }
 }
+

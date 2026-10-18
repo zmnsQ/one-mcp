@@ -13,9 +13,16 @@ export const serverSchema = z.object({
     allowedTools: z.array(cleanString(256).min(1).refine(s => s !== '*')).max(500).refine(unique),
     tunnelID: cleanString(256), profile: cleanString(64), startWithAll: z.boolean().optional()
 });
+// Public configuration only. Runtime keys and OAuth tokens never enter settings.json.
+export const remoteConnectionSchema = z.object({
+  preferredTransport: z.enum(['openai', 'cloudflare']).optional(),
+  oauth: z.object({enabled: z.boolean(), publicURL: cleanString(4096), issuer: cleanString(4096), jwksURL: cleanString(4096), scope: cleanString(512)}).optional(),
+  cloudflare: z.object({executable: cleanString(4096), mode: z.enum(['quick','named']), tunnelID: cleanString(256), credentialsFile: cleanString(4096), publicURL: cleanString(4096)}).optional()
+}).strict();
 export const preferencesSchema = z.object({
     nodePath: cleanString(4096), gatewayScript: cleanString(4096), tunnelClientPath: cleanString(4096), port: z.number().int().min(1024).max(65535),
     aggregateTunnelID: cleanString(256), aggregateProfile: cleanString(256), aggregateProfileFile: cleanString(4096).optional(), mode: z.enum(['aggregate', 'individual']),
+  remoteConnection: remoteConnectionSchema.optional(),
     servers: z.array(serverSchema).max(16).refine(s => unique(s.map(x => x.id)))
 });
 export type Preferences = z.infer<typeof preferencesSchema>;
@@ -245,3 +252,4 @@ export async function runtimeServer(s: ServerConfig): Promise<Record<string, unk
     }
     return { id: s.id, name: s.name, executable: s.executable, arguments: s.arguments, workingDirectory: s.workingDirectory, allowedTools: s.allowedTools, environment };
 }
+

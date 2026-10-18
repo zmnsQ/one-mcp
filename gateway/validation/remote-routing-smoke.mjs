@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import http from 'node:http';
+const request=(url, options={})=>new Promise((resolve,reject)=>{const req=http.request(url,{method:options.method??'GET',headers:options.headers},res=>{let body='';res.on('data',x=>body+=x);res.on('end',()=>resolve({status:res.statusCode,headers:{get:name=>res.headers[name]},json:async()=>JSON.parse(body)}));});req.on('error',reject);req.end(options.body);});
+import fs from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import path from 'node:path';
+import {spawn} from 'node:child_process';
+import {createInterface} from 'node:readline';
+import {defaults,workspace,writeConfiguration} from '../dist/configuration.js';
+const root=await fs.mkdtemp(path.join(tmpdir(),'omcp-oauth-'));
+const port=19873;
+let child;
+try {
+ const w=await workspace(root);
+ const oauth={enabled:true,publicURL:'https://mcp.example.com/mcp',issuer:'https://auth.example.com',jwksURL:'https://auth.example.com/jwks',scope:'mcp:tools'};
+ await writeConfiguration(w,{...defaults(),port,remoteConnection:{preferredTransport:'cloudflare',oauth,cloudflare:{executable:'/fixture/cloudflared',mode:'named',tunnelID:'',credentialsFile:'',publicURL:'https://mcp.example.com'}}},'missing');
+ await fs.mkdir(path.join(root,'Runtime'),{mode:0o700});
+ child=spawn(process.execPath,['dist/index.js','--port',String(port),'--workspace-id','default','--settings-file',path.join(root,'settings.json')],{stdio:['pipe','pipe','pipe']});
+ let diagnostic=''; child.stderr.on('data',b=>diagnostic+=b);
+ const lines=createInterface({input:child.stdout});
+ await Promise.race([new Promise(resolve=>lines.on('line',l=>{if(JSON.parse(l).type==='ready')resolve();})),new Promise((_,reject)=>{child.once('exit',()=>reject(Error('gateway exited: '+diagnostic)));setTimeout(()=>reject(Error('ready timeout')),10000).unref();})]);
+ const base=`http://127.0.0.1:${port}`;
+ let response=await request(base+'/mcp',{method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+ assert.equal(response.status,401);assert.match(response.headers.get('www-authenticate'),/oauth-protected-resource\/mcp/);
+ response=await request(base+'/.well-known/oauth-protected-resource/mcp'); assert.equal(response.status,200); assert.deepEqual((await response.json()).authorization_servers,[oauth.issuer]);
+ response=await request(base+'/mcp',{headers:{host:'attacker.example.com'}});assert.equal(response.status,403);
+ response=await request(base+'/mcp',{headers:{host:'mcp.example.com'}});assert.equal(response.status,401);
+ response=await request(base+'/health',{headers:{host:'mcp.example.com'}});assert.equal(response.status,401);
+ response=await request(base+'/health');assert.equal(response.status,200);
+ response=await request(base+'/.well-known/oauth-protected-resource',{headers:{origin:'https://evil.example.com'}});assert.equal(response.status,403);
+ child.stdin.write(JSON.stringify({id:'done',method:'shutdown'})+'\n');
+ await new Promise(resolve=>child.once('exit',resolve)); lines.close();
+ console.log('PASS saved OAuth startup, private/local health, public host gating, metadata discovery, authentication-before-routing');
+} finally {if(child?.exitCode===null)child.kill('SIGTERM');await fs.rm(root,{recursive:true,force:true});}

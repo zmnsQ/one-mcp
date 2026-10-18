@@ -62,6 +62,18 @@ struct ConfigurationApplicationNotice: Identifiable {
     }
     func tunnelRestartReasons(_ key: String) -> [String] {
         guard isGatewayRunning, runningTunnelKeys.contains(key) else { return [] }
+        if key == "transport:cloudflare" {
+            guard let settings = savedPreferences.remoteConnection?.cloudflare else { return ["配置已移除"] }
+            let desired = ["executable": ConfigurationFingerprint.scalar(settings.executable),
+                "mode": ConfigurationFingerprint.scalar(settings.mode),
+                "tunnelID": ConfigurationFingerprint.scalar(settings.mode == "named" ? settings.tunnelID : ""),
+                "credentialsFile": ConfigurationFingerprint.scalar(settings.mode == "named" ? settings.credentialsFile : ""),
+                "publicURL": ConfigurationFingerprint.scalar(settings.mode == "named" ? settings.publicURL : ""),
+                "endpoint": ConfigurationFingerprint.scalar("http://127.0.0.1:\(savedPreferences.port)")]
+            return ConfigurationFingerprint.changed(desired, applied: appliedTunnelFingerprints[key] ?? [:],
+                labels: [("executable", "Cloudflare 程序"), ("mode", "连接模式"), ("tunnelID", "Tunnel UUID"),
+                         ("credentialsFile", "凭据文件路径"), ("publicURL", "公开域名"), ("endpoint", "网关端口")])
+        }
         let server = savedPreferences.servers.first(where: { $0.id == key })
         if key != "aggregate" && server == nil { return ["配置已移除"] }
         let profileFile = key == "aggregate" ? (savedPreferences.aggregateProfileFile ?? "") : ""
@@ -78,10 +90,17 @@ struct ConfigurationApplicationNotice: Identifiable {
     var gatewayRestartReasons: [String] {
         guard isGatewayRunning else { return [] }
         func path(_ value: String) -> String { URL(fileURLWithPath: value).resolvingSymlinksInPath().standardizedFileURL.path }
-        let desired = ["nodePath": ConfigurationFingerprint.scalar(path(savedPreferences.nodePath)),
+        var desired = ["nodePath": ConfigurationFingerprint.scalar(path(savedPreferences.nodePath)),
                        "gatewayScript": ConfigurationFingerprint.scalar(path(savedPreferences.gatewayScript))]
+        let oauth = savedPreferences.remoteConnection?.oauth
+        desired["oauthEnabled"] = ConfigurationFingerprint.scalar(oauth?.enabled == true ? "true" : "false")
+        desired["oauthPublicURL"] = ConfigurationFingerprint.scalar(oauth?.publicURL ?? "")
+        desired["oauthIssuer"] = ConfigurationFingerprint.scalar(oauth?.issuer ?? "")
+        desired["oauthJWKSURL"] = ConfigurationFingerprint.scalar(oauth?.jwksURL ?? "")
+        desired["oauthScope"] = ConfigurationFingerprint.scalar(oauth?.scope ?? "mcp:tools")
         var reasons = ConfigurationFingerprint.changed(desired, applied: appliedGatewayFingerprints,
-            labels: [("nodePath", "Node 路径"), ("gatewayScript", "网关脚本")])
+            labels: [("nodePath", "Node 路径"), ("gatewayScript", "网关脚本"), ("oauthEnabled", "OAuth 开关"),
+                     ("oauthPublicURL", "OAuth 公开地址"), ("oauthIssuer", "OAuth issuer"), ("oauthJWKSURL", "OAuth JWKS"), ("oauthScope", "OAuth scope")])
         if let port = attachedPort, port != savedPreferences.port { reasons.append("监听端口") }
         return reasons
     }
@@ -103,10 +122,11 @@ struct ConfigurationApplicationNotice: Identifiable {
         for key in runningTunnelKeys.sorted() {
             let reasons = tunnelRestartReasons(key)
             if !reasons.isEmpty {
-                let name = key == "aggregate" ? "聚合隧道" : (savedPreferences.servers.first(where: { $0.id == key })?.name ?? key) + " 隧道"
+                let name = key == "transport:cloudflare" ? "Cloudflare 连接" : key == "aggregate" ? "聚合隧道" : (savedPreferences.servers.first(where: { $0.id == key })?.name ?? key) + " 隧道"
                 result.append(.init(id: "tunnel:" + key, title: name + " · 待重启生效", detail: reasons.joined(separator: "、")))
             }
         }
         return result
     }
 }
+

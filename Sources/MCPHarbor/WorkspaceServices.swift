@@ -125,7 +125,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         let oldID = currentWorkspaceID, oldWorkspaces = workspaces, oldReadable = storageReadable, oldRevision = savedRevision
         let record = WorkspaceRecord(id: UUID().uuidString.lowercased(), name: name)
         workspaces.append(record); currentWorkspaceID = record.id
-        preferences.servers = []; preferences.aggregateTunnelID = ""; preferences.aggregateProfileFile = nil
+        preferences.servers = []; preferences.aggregateTunnelID = ""; preferences.aggregateProfileFile = nil; preferences.remoteConnection = nil
         preferences.aggregateProfile = "mcpharbor-" + String(record.id.prefix(8))
         storageReadable = true
         savedRevision = configurationRevision()
@@ -165,7 +165,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         } catch { errorMessage = "工作空间未切换：\(error.localizedDescription)" }
     }
     func clearRuntimeState() {
-        healthTasks.values.forEach { $0.cancel() }; healthTasks = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; requestTraces = []; connectionEvents = []
+        healthTasks.values.forEach { $0.cancel() }; healthTasks = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil; requestTraces = []; connectionEvents = []
         clearPendingCommands(); gateway = nil; tunnels = [:]; gatewayState = "Stopped"
         runtimeValues = [:]; tunnelKey = ""; redactionValues = []; tools = [:]; states = [:]; tunnelStates = [:]
         logs = []; notice = nil; toolChanges = [:]; selectedID = nil; doctorPassed = [:]; tunnelReady = [:]; initializedTargets = [:]; checkedTargets = [:]
@@ -201,6 +201,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
     }
     func validatePreferences(_ value: Preferences, requireInstalled: Bool = true) throws {
         func invalid(_ text: String) -> Error { NSError(domain: "MCPHarbor", code: 12, userInfo: [NSLocalizedDescriptionKey: text]) }
+        if let issue = RemoteConnectionValidation.issue(value.remoteConnection) { throw invalid(issue) }
         guard ["aggregate", "individual"].contains(value.mode) else { throw invalid("出口模式无效。") }
         guard (1024...65535).contains(value.port), value.servers.count <= 16 else { throw invalid("端口应为1024–65535，服务器最多16个。") }
         guard Set(value.servers.map(\.id)).count == value.servers.count else { throw invalid("服务器ID重复。") }
@@ -318,3 +319,4 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         do { try text.write(to: url, atomically: true, encoding: .utf8) } catch { errorMessage = error.localizedDescription }
     }
 }
+

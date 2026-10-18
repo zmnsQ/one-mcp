@@ -93,3 +93,8 @@ A project license has not yet been selected. Publishing the source does not gran
 ## Command line and AI agents
 
 The native UI groups work into MCP Services, ChatGPT Connections and Settings; tool permissions live with each service. The CLI shares its workspace configuration and gateway; it does not maintain a second server registry. Start with `./bin/onemcp help` after building the gateway. Read the [CLI reference](docs/CLI.md) and install the optional [One MCP agent skill](skills/one-mcp/SKILL.md) in your chosen agent. Configuration mutations preview first and require an explicit revision on apply. Settings can discover existing official tunnel-client paths and profile metadata without copying credentials or executing candidates.
+
+
+## Remote connection setup / 远程连接设置
+
+The app includes staged OpenAI Tunnel onboarding, external OAuth resource-server protection, and Cloudflare Tunnel management. See [setup, security boundaries and compatibility](docs/REMOTE_CONNECTIONS.zh-CN.md). Real macOS and provider-account acceptance testing is required before production use.
