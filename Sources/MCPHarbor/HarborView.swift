@@ -387,27 +387,25 @@ struct HarborView: View {
     private var tunnelSettings: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                TunnelOnboardingGuide().environmentObject(store)
-                Text("每条隧道有自己的名称、MCP 服务选择、连接方式和启动设置。新增 MCP 不会自动加入已有隧道。")
-                    .font(.callout).foregroundStyle(.secondary)
-                if !store.gatewayReady {
-                    Label("先点击顶部“启动网关”，再创建或复用下方连接配置。", systemImage: "info.circle")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                GroupBox("2 · 安装客户端，准备运行密钥") {
-                    VStack(alignment: .leading, spacing: 14) {
-                        TunnelAccountGuide()
-                        Divider()
-                        Link("安装官方 tunnel-client", destination: TunnelHelp.installation)
-                        Text("从官方入口安装后，选择本机可执行文件。打开页面不会自动安装、创建密钥或启动连接。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }.padding(12)
-                    Form {
-                        HStack { TextField("tunnel-client 绝对路径", text: $store.preferences.tunnelClientPath); Button("选择") { store.choosePath("tunnel") } }
-                    }.formStyle(.grouped)
-                }
                 TunnelRecordsView().environmentObject(store)
-                TunnelVerificationGuide()
+                if !store.gatewayReady {
+                    Label("启动网关后即可启动隧道；现在也可以添加或编辑记录。", systemImage: "info.circle")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                DisclosureGroup("首次连接与客户端设置") {
+                    VStack(alignment: .leading, spacing: 16) {
+                        TunnelOnboardingGuide().environmentObject(store)
+                        TunnelAccountGuide()
+                        Link("安装官方 tunnel-client", destination: TunnelHelp.installation)
+                        HStack {
+                            TextField("tunnel-client 绝对路径", text: $store.preferences.tunnelClientPath)
+                            Button("选择") { store.choosePath("tunnel") }
+                        }.textFieldStyle(.roundedBorder)
+                        Text("客户端路径为工作空间共享设置，修改后使用顶部保存配置。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        TunnelVerificationGuide()
+                    }.padding(.top, 12)
+                }
                 RemoteConnectionSettingsView().environmentObject(store)
                 DisclosureGroup("连接日志与请求观测") {
                     MCPRequestTracePanel().environmentObject(store)
