@@ -62,30 +62,25 @@ struct ConfigurationApplicationNotice: Identifiable {
     }
     func tunnelRestartReasons(_ key: String) -> [String] {
         guard isGatewayRunning, runningTunnelKeys.contains(key) else { return [] }
-        if key == "transport:cloudflare" {
-            guard let settings = savedPreferences.remoteConnection?.cloudflare else { return ["配置已移除"] }
-            let desired = ["executable": ConfigurationFingerprint.scalar(settings.executable),
+        guard let record = savedPreferences.effectiveTunnelRecords.first(where: { $0.id == key }) else { return ["配置已移除"] }
+        var desired = ["endpoint": ConfigurationFingerprint.scalar("http://127.0.0.1:\(savedPreferences.port)/tunnels/\(record.id)/mcp"),
+                       "serverIDs": ConfigurationFingerprint.set(record.serverIDs)]
+        var labels = [("endpoint", "网关端点"), ("serverIDs", "所选 MCP 服务")]
+        if record.transport == "cloudflare", let settings = record.cloudflare {
+            desired.merge(["executable": ConfigurationFingerprint.scalar(settings.executable),
                 "mode": ConfigurationFingerprint.scalar(settings.mode),
                 "tunnelID": ConfigurationFingerprint.scalar(settings.mode == "named" ? settings.tunnelID : ""),
                 "credentialsFile": ConfigurationFingerprint.scalar(settings.mode == "named" ? settings.credentialsFile : ""),
-                "publicURL": ConfigurationFingerprint.scalar(settings.mode == "named" ? settings.publicURL : ""),
-                "endpoint": ConfigurationFingerprint.scalar("http://127.0.0.1:\(savedPreferences.port)")]
-            return ConfigurationFingerprint.changed(desired, applied: appliedTunnelFingerprints[key] ?? [:],
-                labels: [("executable", "Cloudflare 程序"), ("mode", "连接模式"), ("tunnelID", "Tunnel UUID"),
-                         ("credentialsFile", "凭据文件路径"), ("publicURL", "公开域名"), ("endpoint", "网关端口")])
+                "publicURL": ConfigurationFingerprint.scalar(settings.mode == "named" ? settings.publicURL : "")]) { _, new in new }
+            labels += [("executable", "Cloudflare 程序"), ("mode", "连接模式"), ("tunnelID", "Tunnel UUID"), ("credentialsFile", "凭据文件路径"), ("publicURL", "公开域名")]
+        } else {
+            let file = record.profileFile?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false ? record.profileFile! : ""
+            desired.merge(["executable": ConfigurationFingerprint.scalar(savedPreferences.tunnelClientPath),
+                "profile": ConfigurationFingerprint.scalar(file.isEmpty ? record.profile : ""),
+                "tunnelID": ConfigurationFingerprint.scalar(record.tunnelID), "profileFile": ConfigurationFingerprint.scalar(file)]) { _, new in new }
+            labels += [("executable", "隧道程序"), ("profile", "Profile"), ("tunnelID", "Tunnel ID"), ("profileFile", "Profile 文件")]
         }
-        let server = savedPreferences.servers.first(where: { $0.id == key })
-        if key != "aggregate" && server == nil { return ["配置已移除"] }
-        let profileFile = key == "aggregate" ? (savedPreferences.aggregateProfileFile ?? "") : ""
-        let file = profileFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "" : profileFile
-        let desired = ["executable": ConfigurationFingerprint.scalar(savedPreferences.tunnelClientPath),
-            "profile": ConfigurationFingerprint.scalar(file.isEmpty ? (server?.profile ?? savedPreferences.aggregateProfile) : ""),
-            "tunnelID": ConfigurationFingerprint.scalar(server?.tunnelID ?? savedPreferences.aggregateTunnelID),
-            "profileFile": ConfigurationFingerprint.scalar(file),
-            "endpoint": ConfigurationFingerprint.scalar("http://127.0.0.1:\(savedPreferences.port)" + (key == "aggregate" ? "/mcp" : "/servers/\(key)/mcp"))]
-        return ConfigurationFingerprint.changed(desired, applied: appliedTunnelFingerprints[key] ?? [:],
-            labels: [("executable", "隧道程序"), ("profile", "Profile"), ("tunnelID", "Tunnel ID"),
-                     ("profileFile", "Profile 文件"), ("endpoint", "网关端口")])
+        return ConfigurationFingerprint.changed(desired, applied: appliedTunnelFingerprints[key] ?? [:], labels: labels)
     }
     var gatewayRestartReasons: [String] {
         guard isGatewayRunning else { return [] }
@@ -122,7 +117,7 @@ struct ConfigurationApplicationNotice: Identifiable {
         for key in runningTunnelKeys.sorted() {
             let reasons = tunnelRestartReasons(key)
             if !reasons.isEmpty {
-                let name = key == "transport:cloudflare" ? "Cloudflare 连接" : key == "aggregate" ? "聚合隧道" : (savedPreferences.servers.first(where: { $0.id == key })?.name ?? key) + " 隧道"
+                let name = savedPreferences.effectiveTunnelRecords.first(where: { $0.id == key })?.name ?? key
                 result.append(.init(id: "tunnel:" + key, title: name + " · 待重启生效", detail: reasons.joined(separator: "、")))
             }
         }

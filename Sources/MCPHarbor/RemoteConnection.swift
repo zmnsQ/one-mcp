@@ -66,12 +66,13 @@ enum RemoteConnectionValidation {
 }
 
 @MainActor extension HarborStore {
-    @discardableResult func cloudflareAction(_ action: String, persistConfiguration: Bool = true) -> Bool {
-        guard gatewayReady, !tunnelRunning("transport:cloudflare"), !hasPendingCommand(for: "transport:cloudflare"),
-              ["doctor", "run"].contains(action), let settings = preferences.remoteConnection?.cloudflare else {
+    @discardableResult func cloudflareAction(_ action: String, record: TunnelRecord, persistConfiguration: Bool = true) -> Bool {
+        guard requireScopedTunnelRuntime() else { return false }
+        guard gatewayReady, !tunnelRunning(record.id), !hasPendingCommand(for: record.id),
+              ["doctor", "run"].contains(action), validRecordBinding(record), let settings = record.cloudflare else {
             errorMessage = "请先配置 Cloudflare、启动网关并等待当前操作完成。"; return false
         }
-        if let issue = RemoteConnectionValidation.issue(preferences.remoteConnection) { errorMessage = issue; return false }
+        if let issue = RemoteConnectionValidation.issue(RemoteConnectionSettings(oauth: preferences.remoteConnection?.oauth, cloudflare: settings)) { errorMessage = issue; return false }
         guard settings.executable.hasPrefix("/"), FileManager.default.isExecutableFile(atPath: settings.executable) else {
             errorMessage = "请选择已安装的 cloudflared 可执行文件。"; return false
         }
@@ -85,7 +86,7 @@ enum RemoteConnectionValidation {
                 errorMessage = "OAuth 配置已改变，请先保存并明确重启网关后再连接 Cloudflare。"; return false
             }
         }
-        return command("cloudflareAction", params: ["action":action, "key":"transport:cloudflare", "executable":settings.executable,
+        return command("cloudflareAction", params: ["action":action, "key":record.id, "serverIDs":record.serverIDs, "executable":settings.executable,
             "mode":settings.mode, "tunnelID":settings.mode == "named" ? settings.tunnelID : "",
             "credentialsFile":settings.mode == "named" ? settings.credentialsFile : "",
             "publicURL":settings.mode == "named" ? settings.publicURL : ""])

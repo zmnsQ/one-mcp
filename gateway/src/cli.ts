@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { controlRequest, privateDirectory } from './control.js';
-import { defaultRoot, workspace, socketPath, safeServer, readJSON, importCandidates, writeConfiguration, runtimeServer, lockInfo, recoverLock, preferencesSchema, secretLike, acquireLease } from './configuration.js';
+import { configuredTunnelRecords, defaultRoot, workspace, socketPath, safeServer, readJSON, importCandidates, writeConfiguration, runtimeServer, lockInfo, recoverLock, preferencesSchema, secretLike, acquireLease } from './configuration.js';
 function remoteSettingsJSON(value: string): unknown { try { return JSON.parse(value); } catch { throw new Error('Invalid remote connection JSON'); } }
 const argv = process.argv.slice(2), positional: string[] = [], opts: Record<string, string | boolean> = {};
 const boolean = new Set(['json', 'apply', 'help']);
@@ -38,7 +38,7 @@ try {
     action = group + ' ' + verb;
     const root = resolve(String(opts.home ?? defaultRoot()));
     if (group === 'help' || opts.help) {
-        output({ usage: 'onemcp <command> [--json] [--home PATH] [--workspace ID]', commands: ['diagnostics mcp [--output NEW_REPORT.json]', 'status', 'environment inspect', 'workspaces', 'servers list|start|stop --id ID', 'tools discover --id ID', 'config validate|init|lock', 'config import --file PATH', 'config allow-tools --id ID --names tool1,tool2', 'config set --field nodePath|gatewayScript|tunnelClientPath|port|aggregateTunnelID|aggregateProfile|mode --value VALUE', 'config recover-lock --token TOKEN', 'gateway run|stop', 'tunnel init|doctor|start|stop --id aggregate|SERVER_ID', 'cloudflare doctor|start|stop', 'config set --field remoteConnection --value JSON'], mutation: 'Commands preview unless --apply. Saved configuration changes also require --expect-revision SHA (or missing). Runtime actions use the existing private gateway. Credentials are read from explicit session environment only; no Keychain reads.' });
+        output({ usage: 'onemcp <command> [--json] [--home PATH] [--workspace ID]', commands: ['diagnostics mcp [--output NEW_REPORT.json]', 'status', 'environment inspect', 'workspaces', 'servers list|start|stop --id ID', 'tools discover --id ID', 'config validate|init|lock', 'config import --file PATH', 'config allow-tools --id ID --names tool1,tool2', 'config set --field nodePath|gatewayScript|tunnelClientPath|port|aggregateTunnelID|aggregateProfile|mode --value VALUE', 'config recover-lock --token TOKEN', 'gateway run|stop', 'tunnels list', 'tunnel init|doctor|start|stop --id RECORD_ID', 'cloudflare doctor|start|stop', 'config set --field remoteConnection --value JSON'], mutation: 'Commands preview unless --apply. Saved configuration changes also require --expect-revision SHA (or missing). Runtime actions use the existing private gateway. Credentials are read from explicit session environment only; no Keychain reads.' });
     }
     else if (group === 'environment' && verb === 'inspect')
         output(await discoverEnvironment());
@@ -105,13 +105,13 @@ try {
             await mutation({ id: s.id, before: s.allowedTools, after: names, revision: w.revision }, () => save(config));
         }
         else if (group === 'config' && verb === 'set') {
-            const fields = ['nodePath', 'gatewayScript', 'tunnelClientPath', 'port', 'aggregateTunnelID', 'aggregateProfile', 'aggregateProfileFile', 'mode', 'remoteConnection'];
+            const fields = ['nodePath', 'gatewayScript', 'tunnelClientPath', 'port', 'aggregateTunnelID', 'aggregateProfile', 'aggregateProfileFile', 'mode', 'remoteConnection', 'tunnelRecords'];
             const field = String(opts.field);
             if (!fields.includes(field) || typeof opts.value !== 'string')
                 throw new Error('Unsupported field or missing --value');
             if (secretLike(opts.value))
                 throw new Error('Credential-like configuration value rejected');
-            const config = preferencesSchema.parse({ ...w.config, [field]: field === 'port' ? Number(opts.value) : field === 'remoteConnection' ? remoteSettingsJSON(opts.value) : opts.value });
+            const config = preferencesSchema.parse({ ...w.config, [field]: field === 'port' ? Number(opts.value) : ['remoteConnection', 'tunnelRecords'].includes(field) ? remoteSettingsJSON(opts.value) : opts.value });
             await mutation({ field, revision: w.revision }, () => save(config));
         }
         else if (group === 'gateway' && verb === 'run')
@@ -149,12 +149,39 @@ try {
             await live();
             output(await rpc('listTools', { serverId: s.id }));
         }
+        else if (group === 'tunnels' && verb === 'list') output(configuredTunnelRecords(w.config));
+        else if (group === 'tunnel' && configuredTunnelRecords(w.config).some(r => r.id === (opts.id ?? 'aggregate')) && ['init','doctor','start','stop'].includes(verb)) {
+            const record = configuredTunnelRecords(w.config).find(r => r.id === (opts.id ?? 'aggregate'))!;
+            if (record.transport === 'cloudflare' && verb === 'init') throw new Error('Create Cloudflare credentials through the provider first');
+            await mutation({operation:verb, record:record.name, key:record.id, serverIDs:record.serverIDs, transport:record.transport}, async () => {
+                const snapshot = await rpc('status') as {configurationFingerprints?: Record<string,string>};
+                const identity = validateIdentity(snapshot, await fs.realpath(root), w.id);
+                if (verb === 'stop') return rpc('stopTunnel', {key:record.id, expectedInstanceID:identity.instanceID});
+                if (snapshot.configurationFingerprints?.tunnelRecordsVersion !== configurationFingerprint(['1'])) throw new Error('Restart the updated gateway before using scoped tunnel records');
+                const common = {key:record.id,serverIDs:record.serverIDs,action:verb === 'start' ? 'run' : verb, expectedInstanceID:identity.instanceID};
+                if (record.transport === 'cloudflare') {
+                    if (!record.cloudflare) throw new Error('Configure this Cloudflare record first');
+                    if (verb === 'start') {
+                        const oauth = w.config.remoteConnection?.oauth;
+                        if (!oauth?.enabled) throw new Error('Enable and save OAuth before Cloudflare startup');
+                        const fields = {oauthEnabled:String(oauth.enabled),oauthPublicURL:oauth.publicURL,oauthIssuer:oauth.issuer,oauthJWKSURL:oauth.jwksURL,oauthScope:oauth.scope};
+                        if (Object.entries(fields).some(([key,value]) => snapshot.configurationFingerprints?.[key] !== configurationFingerprint([value]))) throw new Error('Saved OAuth policy is not active; explicitly restart the gateway before Cloudflare startup');
+                    }
+                    return rpc('cloudflareAction', {...record.cloudflare,...common});
+                }
+                return rpc('tunnelAction',{...common,executable:w.config.tunnelClientPath,profile:record.profile,tunnelID:record.tunnelID,profileFile:record.profileFile,runtimeKey:process.env.CONTROL_PLANE_API_KEY ?? ''});
+            });
+        }
         else if (group === 'cloudflare' && ['doctor', 'start', 'stop'].includes(verb)) {
-            const config = w.config.remoteConnection?.cloudflare;
+            const candidates = configuredTunnelRecords(w.config).filter(r => r.transport === 'cloudflare' && (!opts.id || r.id === opts.id));
+            if (candidates.length !== 1) throw new Error('Select one Cloudflare record using tunnel doctor|start|stop --id RECORD_ID');
+            const record = candidates[0]!;
+            const config = record.cloudflare;
             if (verb !== 'stop' && !config) throw new Error('Cloudflare configuration required');
             await mutation({ operation: verb, publicExposure: verb === 'start', mode: config?.mode }, async () => {
                 const snapshot = await rpc('status') as {configurationFingerprints?: Record<string,string>};
                 const identity = validateIdentity(snapshot, await fs.realpath(root), w.id);
+                if (verb !== 'stop' && snapshot.configurationFingerprints?.tunnelRecordsVersion !== configurationFingerprint(['1'])) throw new Error('Restart the updated gateway before using scoped tunnel records');
                 if (verb === 'start') {
                     const oauth = w.config.remoteConnection?.oauth;
                     if (!oauth?.enabled) throw new Error('Enable and save OAuth before Cloudflare startup');
@@ -163,15 +190,12 @@ try {
                         throw new Error('Saved OAuth policy is not active; explicitly restart the gateway before Cloudflare startup');
                     }
                 }
-                return verb === 'stop' ? rpc('stopTunnel', {key:'transport:cloudflare', expectedInstanceID:identity.instanceID}) :
-                    rpc('cloudflareAction', {...config, action:verb === 'start' ? 'run' : verb, expectedInstanceID:identity.instanceID});
+                return verb === 'stop' ? rpc('stopTunnel', {key:record.id, expectedInstanceID:identity.instanceID}) :
+                    rpc('cloudflareAction', {...config, key:record.id,serverIDs:record.serverIDs, action:verb === 'start' ? 'run' : verb, expectedInstanceID:identity.instanceID});
             });
         }
         else if (group === 'tunnel' && ['init', 'doctor', 'start', 'stop'].includes(verb)) {
-            const key = String(opts.id ?? 'aggregate');
-            const s = key === 'aggregate' ? undefined : server();
-            await mutation({ operation: verb, key, profile: s?.profile ?? w.config.aggregateProfile }, async () => { await live(); if (verb === 'stop')
-                return rpc('stopTunnel', { key }); const runtimeKey = process.env.CONTROL_PLANE_API_KEY ?? '';  return rpc('tunnelAction', { key, action: verb === 'start' ? 'run' : verb, executable: w.config.tunnelClientPath, profile: s?.profile ?? w.config.aggregateProfile, tunnelID: s?.tunnelID ?? w.config.aggregateTunnelID, runtimeKey, profileFile: key === 'aggregate' ? w.config.aggregateProfileFile : undefined }); });
+            throw new Error('Unknown tunnel record; use tunnels list and --id RECORD_ID');
         }
         else
             throw new Error('Unknown command; use onemcp help');

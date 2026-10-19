@@ -35,20 +35,6 @@ struct EnvironmentDiscoveryView: View {
                         Label(store.discoveryBusy ? "正在检测…" : "检测本机环境", systemImage: "magnifyingglass")
                     }.disabled(store.discoveryBusy)
                 }
-                if let profileFile = store.preferences.aggregateProfileFile {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Label("聚合隧道正在复用现有文件", systemImage: "doc.badge.gearshape")
-                            .font(.callout.bold())
-                        detail("当前 Profile 文件", value: profileFile)
-                        Text("此路径优先于手动填写的 Profile 名称。复用期间不能初始化该文件。")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Button("改用命名 Profile") {
-                            store.preferences.aggregateProfileFile = nil
-                        }.disabled(store.anyProcessRunning)
-                        Text("切换仅修改当前界面设置，请保存后使用；原文件不会被删除或修改。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }.padding(12).background(.background.secondary, in: RoundedRectangle(cornerRadius: 10))
-                }
                 if store.discoveryBusy {
                     HStack(spacing: 10) {
                         ProgressView().controlSize(.small)
@@ -93,7 +79,7 @@ struct EnvironmentDiscoveryView: View {
                     detail("客户端路径", value: client.path)
                     detail("来源", value: client.source)
                 case .profile(let profile):
-                    Text("将复用此文件的确切路径，并更新聚合隧道 Profile 名称及 Tunnel ID。独立隧道设置保持不变。")
+                    Text("将新增一条使用此文件路径、Profile 名称及 Tunnel ID 的隧道记录。随后请在隧道记录中选择 MCP 服务。")
                     detail("Profile", value: profile.name)
                     detail("Tunnel ID", value: profile.tunnelID ?? "未提供")
                     detail("原配置端点（仅供核对）", value: profile.endpoint ?? "未提供")

@@ -98,3 +98,7 @@ The native UI groups work into MCP Services, ChatGPT Connections and Settings; t
 ## Remote connection setup / 远程连接设置
 
 The app includes staged OpenAI Tunnel onboarding, external OAuth resource-server protection, and Cloudflare Tunnel management. See [setup, security boundaries and compatibility](docs/REMOTE_CONNECTIONS.zh-CN.md). Real macOS and provider-account acceptance testing is required before production use.
+
+## Independent tunnel records
+
+Add named tunnel records and bind one or more MCP services to each. OpenAI and Cloudflare records have independent lifecycle and scoped routes; new MCP services are never implicitly added. See [configuration, migration and verification](docs/TUNNEL_RECORDS.md).

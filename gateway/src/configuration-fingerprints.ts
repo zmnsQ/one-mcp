@@ -50,7 +50,7 @@ export function serverConfigurationFingerprints(config: ServerConfiguration): Co
     };
 }
 
-type TunnelConfiguration = { executable: string; profile: string; tunnelID: string; profileFile?: string };
+type TunnelConfiguration = { executable: string; profile: string; tunnelID: string; profileFile?: string; serverIDs?: readonly string[] };
 export function tunnelConfigurationFingerprints(config: TunnelConfiguration, endpoint: string): ConfigurationFingerprints {
     const profileFile = config.profileFile?.trim() ? config.profileFile : '';
     return {
@@ -59,7 +59,8 @@ export function tunnelConfigurationFingerprints(config: TunnelConfiguration, end
         profile: field(profileFile ? '' : config.profile),
         tunnelID: field(config.tunnelID),
         profileFile: field(profileFile),
-        endpoint: field(endpoint)
+        endpoint: field(endpoint),
+        ...(config.serverIDs !== undefined ? {serverIDs: set(config.serverIDs)} : {})
     };
 }
 

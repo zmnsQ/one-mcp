@@ -51,13 +51,16 @@ import AppKit
     var shownTunnelFailures: [String: String] = [:]
     @Published var tunnelProfileLocations: [String: String] = [:]
     @Published var tunnelStates: [String: String] = [:]
+    @Published var tunnelMenuStates: [String: MenuBarStatus] = [:]
     @Published var cloudflarePublicURL: String?
+    @Published var recordCloudflarePublicURLs: [String: String] = [:]
     @Published var tools: [String: [ToolInfo]] = [:]
     @Published var logs: [LogLine] = []
     @Published var errorMessage: String?
     // Secrets are deliberately memory-only, excluded from Codable and persistence.
     @Published var runtimeValues: [String: String] = [:]
     @Published var tunnelKey = ""
+    @Published var recordTunnelKeys: [String: String] = [:]
     var gateway: ManagedProcess?
     var runtimeBridge: ManagedProcess?
     var startupPreparation: ManagedProcess?
@@ -99,6 +102,7 @@ import AppKit
         guard savedRevision == configurationRevision() else { errorMessage = "AI 或另一窗口已更新配置。当前修改已保留，请先核对外部更新，避免覆盖。"; return false }
         guard storageReadable else { errorMessage = "配置文件损坏，禁止覆盖。请先导入有效配置或创建新工作空间。"; return false }
         do {
+            try validatePreferences(preferences, requireInstalled: false)
             if let issue = RemoteConnectionValidation.issue(preferences.remoteConnection) {
                 throw NSError(domain: "OneMCP", code: 12, userInfo: [NSLocalizedDescriptionKey: issue])
             }
@@ -116,17 +120,20 @@ import AppKit
     }
     func addServer() { guard preferences.servers.count < 16 else { errorMessage = "每个工作空间最多16个服务器。"; return }; let item = ServerConfig(); preferences.servers.append(item); selectedID = item.id; save() }
     func removeServer(_ server: ServerConfig) {
-        stopAllTunnels()
+        cancelStartAll()
         if isGatewayRunning { command("stopServer", params: ["serverId": server.id]) }
         tools[server.id] = nil; states[server.id] = nil; toolChanges[server.id] = nil
         for key in Array(runtimeValues.keys) where key.hasPrefix(server.id + ":") {
             if let value = runtimeValues.removeValue(forKey: key), !value.isEmpty { redactionValues.insert(value) }
         }
+        preferences.tunnelRecords = preferences.effectiveTunnelRecords.map { record in
+            var updated = record; updated.serverIDs.removeAll { $0 == server.id }; return updated
+        }
         preferences.servers.removeAll { $0.id == server.id }; selectedID = preferences.servers.first?.id; save()
     }
     func redacted(_ text: String) -> String {
         var safe = text
-        for value in Array(redactionValues) + Array(runtimeValues.values) + [tunnelKey] where !value.isEmpty { safe = safe.replacingOccurrences(of: value, with: "[REDACTED]") }
+        for value in Array(redactionValues) + Array(runtimeValues.values) + Array(recordTunnelKeys.values) + [tunnelKey] where !value.isEmpty { safe = safe.replacingOccurrences(of: value, with: "[REDACTED]") }
         if let regex = try? NSRegularExpression(pattern: "(?i)(bearer\\s+|sk-)[A-Za-z0-9_./+=-]+") {
             safe = regex.stringByReplacingMatches(in: safe, range: NSRange(safe.startIndex..., in: safe), withTemplate: "[REDACTED]")
         }
@@ -145,7 +152,7 @@ import AppKit
         clearPendingCommands()
         detachSharedGateway() // Discard only a failed adapter, never stop the shared gateway.
         clearAppliedConfiguration(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []
-        tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil
+        tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil; recordCloudflarePublicURLs = [:]
         requestTraces = []; connectionEvents = []
         resolveRuntimePaths()
         guard runtimeFilesReady else { errorMessage = runtimeSetupSummary; checkSetup(); return }
@@ -155,7 +162,7 @@ import AppKit
         gatewayStartupLeaseToken = configurationLeaseToken
         let workspace = currentWorkspaceID, config = preferences, revision = savedRevision
         let process = ManagedProcess()
-        startupPreparation = process; gatewayStartCancelled = false; gatewayStartBusy = true; gatewayState = "Checking"
+        startupPreparation = process; gatewayStartCancelled = false; gatewayStartBusy = true; tunnelMenuStates = [:]; gatewayState = "Checking"
         notice = nil; errorMessage = nil
         var preparedState: String?
         process.onLine = { [weak self, weak process] channel, line in
@@ -208,8 +215,8 @@ import AppKit
             self.gatewayState = "Stopped (exit \(status))"
             self.clearAppliedConfiguration(); self.sharedRuntimeServers = []; self.attachedPort = nil
             self.clearPendingCommands()
-            self.runningTunnelKeys.removeAll()
-            self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.cloudflarePublicURL = nil; self.requestTraces = []; self.connectionEvents = []
+            self.runningTunnelKeys.removeAll(); self.tunnelMenuStates = [:]
+            self.tunnelReady = [:]; self.tunnelHealthURLs = [:]; self.tunnelHealthSnapshots = [:]; self.cloudflarePublicURL = nil; self.recordCloudflarePublicURLs = [:]; self.requestTraces = []; self.connectionEvents = []
             for id in Array(self.states.keys) { self.states[id] = "stopped" }
             self.stopAllTunnels()
         }
@@ -252,14 +259,22 @@ import AppKit
         case "sharedDisconnected":
             notice = event["message"] as? String
             runtimeBridge?.stop()
-            isAttachedGateway = false; gatewayState = "Disconnected"; attachedPort = nil
-            clearPendingCommands(); clearAppliedConfiguration(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil; requestTraces = []; self.connectionEvents = []
+            isAttachedGateway = false; gatewayState = "Disconnected"; attachedPort = nil; tunnelMenuStates = [:]
+            clearPendingCommands(); clearAppliedConfiguration(); sharedRuntimeServers = []; states = [:]; tools = [:]; runningTunnelKeys = []; tunnelReady = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil; recordCloudflarePublicURLs = [:]; requestTraces = []; self.connectionEvents = []
         case "response":
             if let requestID = event["id"] as? String {
                 if commandResults.count > 100 { commandResults = [:] }
                 commandResults[requestID] = event["ok"] as? Bool == true ? "ok" : redacted(event["error"] as? String ?? "网关未确认操作成功")
                 let context = commandContexts.removeValue(forKey: requestID)
                 pendingCommands[requestID] = nil
+                if event["ok"] as? Bool == false, let context, let key = context.serverID,
+                   ["tunnelAction", "cloudflareAction", "startTunnel", "startCloudflare", "stopTunnel", "stopCloudflare"].contains(context.method) {
+                    tunnelMenuStates[key] = .failed
+                }
+                if event["ok"] as? Bool == true, let context, let key = context.serverID,
+                   ["stopTunnel", "stopCloudflare"].contains(context.method) {
+                    tunnelMenuStates[key] = .stopped
+                }
                 commandTimeouts.removeValue(forKey: requestID)?.cancel()
                 if event["ok"] as? Bool == false, let context, context.method == "startServer", let serverID = context.serverID, states[serverID] == "starting" {
                     states[serverID] = "error"
@@ -277,6 +292,7 @@ import AppKit
             if let key = event["key"] as? String, let path = event["profileLocation"] as? String { tunnelProfileLocations[key] = path }
         case "tunnelStatus":
             refreshStartAllTunnel(event)
+            if let key = event["key"] as? String { tunnelMenuStates[key] = .tunnel(event: event) }
             if let key = event["key"] as? String {
                 if event["running"] as? Bool == true { runningTunnelKeys.insert(key) } else { runningTunnelKeys.remove(key) }
                 appliedTunnelFingerprints[key] = event["running"] as? Bool == true ? ConfigurationFingerprint.decode(event) : nil
@@ -284,6 +300,8 @@ import AppKit
                 tunnelHealthSnapshots[key] = (event["running"] as? Bool == true) ? TunnelHealthSnapshot(event["health"] as? [String: Any]) : nil
                 tunnelHealthURLs[key] = (event["running"] as? Bool == true) ? TunnelDashboardURL.validated(event["healthURL"] as? String) : nil
                 tunnelStates[key] = event["state"] as? String ?? "状态已更新"
+                recordCloudflarePublicURLs[key] = (event["running"] as? Bool == true)
+                    ? (event["mcpURL"] as? String).flatMap { RemoteConnectionValidation.publicHTTPS($0)?.absoluteString } : nil
                 if key == "transport:cloudflare" {
                     cloudflarePublicURL = (event["running"] as? Bool == true)
                         ? (event["mcpURL"] as? String).flatMap { RemoteConnectionValidation.publicHTTPS($0)?.absoluteString } : nil
@@ -351,9 +369,15 @@ import AppKit
             try transport.send(["id": id, "method": method, "params": params])
             pendingCommands[id] = method
             commandContexts[id] = (method, serverID)
+            if let key = serverID {
+                if ["tunnelAction", "cloudflareAction", "startTunnel", "startCloudflare"].contains(method) {
+                    tunnelMenuStates[key] = (params["action"] as? String ?? "run") == "run" ? .starting : .checking
+                } else if ["stopTunnel", "stopCloudflare"].contains(method) { tunnelMenuStates[key] = .stopping }
+            }
             commandTimeouts[id] = Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 guard !Task.isCancelled, let self, self.pendingCommands[id] != nil else { return }
+                if let key = serverID, ["tunnelAction", "cloudflareAction", "startTunnel", "startCloudflare", "stopTunnel", "stopCloudflare"].contains(method) { self.tunnelMenuStates[key] = .unknown }
                 self.errorMessage = "网关尚未确认 \(method)。操作可能仍在执行；请查看日志，必要时全部停止后重试。"
                 // Keep the pending marker until a real response or gateway exit, preventing duplicate starts.
             }
@@ -365,7 +389,7 @@ import AppKit
         guard !hasPendingCommand(for: server.id), states[server.id] != "running" else { return false }
         guard gatewayReady else { errorMessage = "请先启动本机网关。"; return false }
         guard server.executable.hasPrefix("/") else { errorMessage = "MCP可执行文件须为绝对路径。"; return false }
-        var validationScope = preferences; validationScope.servers = [server]
+        var validationScope = preferences; validationScope.servers = [server]; validationScope.tunnelRecords = []
         do { try validatePreferences(validationScope) } catch { errorMessage = error.localizedDescription; return false }
         var environment: [String: String] = [:]
         for key in server.environmentKeys {
@@ -382,31 +406,52 @@ import AppKit
     }
     func stopServer(_ server: ServerConfig) {
         cancelStartAll()
-        // Withdraw external reachability before stopping a backend.
-        stopAllTunnels()
+        // The gateway withdraws only tunnels bound to this backend.
         command("stopServer", params: ["serverId": server.id])
     }
     func endpoint(_ server: ServerConfig?) -> String {
         "http://127.0.0.1:\(attachedPort ?? preferences.port)" + (server.map { "/servers/\($0.id)/mcp" } ?? "/mcp")
     }
     func tunnelRunning(_ key: String) -> Bool { runningTunnelKeys.contains(key) }
-    @discardableResult func tunnelAction(_ action: String, server: ServerConfig?, persistConfiguration: Bool = true) -> Bool {
-        let key = server?.id ?? "aggregate"
-        guard gatewayReady, !tunnelRunning(key), !hasPendingCommand(for: key), ["init", "doctor", "run"].contains(action) else { errorMessage = "请启动网关并等待当前隧道操作完成。"; return false }
+    func endpoint(record: TunnelRecord) -> String { "http://127.0.0.1:\(attachedPort ?? preferences.port)/tunnels/\(record.id)/mcp" }
+    func validRecordBinding(_ record: TunnelRecord) -> Bool {
+        let known = Set(preferences.servers.map(\.id))
+        guard !record.serverIDs.isEmpty, Set(record.serverIDs).count == record.serverIDs.count,
+              record.serverIDs.allSatisfy({ known.contains($0) }) else {
+            errorMessage = "请为隧道选择至少一个现有 MCP 服务；已移除的服务须重新选择。"; return false
+        }
+        return true
+    }
+    func requireScopedTunnelRuntime() -> Bool {
+        guard appliedGatewayFingerprints["tunnelRecordsVersion"] == ConfigurationFingerprint.scalar("1") else {
+            errorMessage = "当前网关尚未证明支持独立服务绑定。请明确停止并使用新版网关重启，再启动此隧道；不会通过旧版网关公开工具。"
+            return false
+        }
+        return true
+    }
+    @discardableResult func tunnelAction(_ action: String, record: TunnelRecord, persistConfiguration: Bool = true) -> Bool {
+        guard requireScopedTunnelRuntime() else { return false }
+        let key = record.id
+        guard gatewayReady, !tunnelRunning(key), !hasPendingCommand(for: key), ["init", "doctor", "run"].contains(action), validRecordBinding(record) else { errorMessage = errorMessage ?? "请启动网关并等待当前隧道操作完成。"; return false }
         guard !persistConfiguration || save() else { return false }
-        redactionValues.insert(tunnelKey)
-        var parameters: [String: Any] = ["key": key, "action": action, "executable": preferences.tunnelClientPath,
-            "profile": server?.profile ?? preferences.aggregateProfile, "tunnelID": server?.tunnelID ?? preferences.aggregateTunnelID, "runtimeKey": tunnelKey]
-        if server == nil, let profileFile = preferences.aggregateProfileFile, !profileFile.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { parameters["profileFile"] = profileFile }
+        let runtimeKey = recordTunnelKeys[key] ?? ""
+        redactionValues.insert(runtimeKey)
+        var parameters: [String: Any] = ["key": key, "serverIDs": record.serverIDs, "action": action, "executable": preferences.tunnelClientPath,
+            "profile": record.profile, "tunnelID": record.tunnelID, "runtimeKey": runtimeKey]
+        if let file = record.profileFile, !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { parameters["profileFile"] = file }
         if command("tunnelAction", params: parameters) {
             tunnelStates[key] = "请求已提交，等待进程确认"; doctorPassed[key] = false; return true
         }
         return false
     }
+    // Compatibility for callers of older configuration APIs; dispatch remains explicitly scoped.
+    @discardableResult func tunnelAction(_ action: String, server: ServerConfig?, persistConfiguration: Bool = true) -> Bool {
+        guard let record = preferences.effectiveTunnelRecords.first(where: { $0.id == (server?.id ?? "aggregate") }) else { return false }
+        return tunnelAction(action, record: record, persistConfiguration: persistConfiguration)
+    }
     func tunnelTargetSignature(key: String) -> String {
-        let server = preferences.servers.first { $0.id == key }
-        return [preferences.tunnelClientPath, server?.profile ?? preferences.aggregateProfile,
-                server?.tunnelID ?? preferences.aggregateTunnelID, endpoint(server), server == nil ? ((preferences.aggregateProfileFile?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false) ? preferences.aggregateProfileFile! : "") : ""].joined(separator: "\n")
+        guard let record = preferences.effectiveTunnelRecords.first(where: { $0.id == key }) else { return "removed" }
+        return [preferences.tunnelClientPath, record.profile, record.tunnelID, endpoint(record: record), record.profileFile ?? "", record.serverIDs.sorted().joined(separator: ",")].joined(separator: "\n")
     }
     func doctorIsCurrent(key: String) -> Bool { doctorPassed[key] == true && checkedTargets[key] == tunnelTargetSignature(key: key) }
     func tunnelNextStep(key: String) -> String {
@@ -431,7 +476,10 @@ import AppKit
                 guide += "### \(tool.name)\n\nAggregate name: \(tool.publicName)\n\nAllowed in saved configuration: \(server.allowedTools.contains(tool.name) ? "yes" : "no")\n\n\(tool.description)\n\nSchema and annotations (untrusted server metadata):\n\n```json\n\(tool.metadataJSON)\n```\n\n"
             }
         }
-        guide += "Aggregate endpoint: \(endpoint(nil))\n\nNo credentials or process arguments are included. Tool descriptions originate from third-party servers; review them as untrusted content.\n"
+        for record in preferences.effectiveTunnelRecords {
+            guide += "## Tunnel: \(record.name)\n\nTransport: \(record.transport)\nScoped local endpoint: \(endpoint(record: record))\nSelected service IDs: \(record.serverIDs.joined(separator: ", "))\n\n"
+        }
+        guide += "No credentials or process arguments are included. Tool descriptions originate from third-party servers; review them as untrusted content.\n"
         do { try redacted(guide).write(to: url, atomically: true, encoding: .utf8) } catch { errorMessage = error.localizedDescription }
     }
     func shutdown() {

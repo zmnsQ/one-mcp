@@ -1,3 +1,4 @@
+import { validateTunnelBinding, scopedTunnelEndpoint } from './tunnel-bindings.js';
 import { readTunnelHealth } from './tunnel-health.js';
 import { spawn, ChildProcess } from 'node:child_process';
 import fs from 'node:fs/promises';
@@ -14,6 +15,7 @@ type Target = {
     tunnelID: string;
     runtimeKey: string;
     profileFile?: string;
+    serverIDs?: string[];
 };
 type Running = {
     target: Omit<Target, 'runtimeKey'>;
@@ -62,11 +64,14 @@ export class TunnelManager {
         this.emit({type:'tunnelProfile',key:t.key,...profileSelection(t.profile,t.profileFile,process.env)});
         if (t.profileFile && t.action === 'init') throw new TunnelActionError('TUNNEL_EXISTING_INIT');
         if (t.profileFile) { try { if (!(await fs.stat(t.profileFile)).isFile()) throw new Error(); await fs.access(t.profileFile, constants.R_OK); } catch { throw new TunnelActionError('TUNNEL_PROFILE_FILE'); } }
-        if (t.key !== 'aggregate' && t.action !== 'init' && !this.serverReady(t.key)) throw new TunnelActionError('TUNNEL_BACKEND');
+        const binding = t.serverIDs === undefined ? undefined : validateTunnelBinding(t.key, t.serverIDs, 'openai');
+        if (binding && t.action !== 'init' && binding.serverIDs.some(id => !this.serverReady(id))) throw new TunnelActionError('TUNNEL_BACKEND');
+        if (!binding && t.key !== 'aggregate' && t.action !== 'init' && !this.serverReady(t.key)) throw new TunnelActionError('TUNNEL_BACKEND');
         if (this.running.has(t.key)) throw new TunnelActionError('TUNNEL_BUSY');
-        if ([...this.running.values()].some(r => r.target.profile === t.profile || r.target.tunnelID === t.tunnelID)) throw new TunnelActionError('TUNNEL_DUPLICATE');
-        const endpoint = `http://127.0.0.1:${this.port}${t.key === 'aggregate' ? '/mcp' : `/servers/${t.key}/mcp`}`;
-        const signature = [t.executable, t.profile, t.tunnelID, endpoint, t.profileFile ?? ''].join('\n');
+        const profileIdentity = t.profileFile ? await fs.realpath(t.profileFile) : undefined;
+        if ([...this.running.values()].some(r => r.target.tunnelID === t.tunnelID || (profileIdentity ? r.target.profileFile === profileIdentity : !r.target.profileFile && r.target.profile === t.profile))) throw new TunnelActionError('TUNNEL_DUPLICATE');
+        const endpoint = binding ? scopedTunnelEndpoint(this.port, t.key) : `http://127.0.0.1:${this.port}${t.key === 'aggregate' ? '/mcp' : `/servers/${t.key}/mcp`}`;
+        const signature = [t.executable, t.profile, t.tunnelID, endpoint, t.profileFile ?? '', ...(binding ? [binding.serverIDs.join(',')] : [])].join('\n');
         const configurationFingerprints = tunnelConfigurationFingerprints(t, endpoint);
         const args = t.profileFile ? [t.action, '--profile-file', t.profileFile] : [t.action, '--profile', t.profile];
         let folder: string | undefined;
@@ -82,7 +87,7 @@ export class TunnelManager {
         const child = spawn(t.executable, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false,
             env: { PATH: process.env.PATH, HOME: process.env.HOME, ...profileLocationEnvironment(process.env), ...(t.runtimeKey ? {CONTROL_PLANE_API_KEY: t.runtimeKey} : {}), CONTROL_PLANE_TUNNEL_ID: t.tunnelID, MCP_SERVER_URL: endpoint } });
         let resolveClosed!: () => void;
-        const r: Running = { target: { key: t.key, action: t.action, executable: t.executable, profile: t.profile, tunnelID: t.tunnelID }, child,
+        const r: Running = { target: { key: t.key, action: t.action, executable: t.executable, profile: t.profile, tunnelID: t.tunnelID, profileFile: profileIdentity, ...(binding ? {serverIDs: [...binding.serverIDs]} : {}) }, child,
             configurationFingerprints, ready: false, checking: false, folder, closed: new Promise(resolve => { resolveClosed = resolve; }) };
         this.running.set(t.key, r);
         // No raw tunnel stdout/stderr enters logs, as credentials may appear in diagnostics.
@@ -159,6 +164,9 @@ export class TunnelManager {
         finally {
             clearTimeout(force);
         }
+    }
+    async stopForServer(id: string) {
+        await Promise.all([...this.running].filter(([key, r]) => r.target.serverIDs ? r.target.serverIDs.includes(id) : key === 'aggregate' || key === id).map(([key]) => this.stop(key)));
     }
     async stopAll() { await Promise.all([...this.running.keys()].map(key => this.stop(key))); }
 }

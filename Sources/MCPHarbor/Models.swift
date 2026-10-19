@@ -24,6 +24,54 @@ struct Preferences: Codable, Equatable {
     var mode = "aggregate"
     var remoteConnection: RemoteConnectionSettings?
     var servers: [ServerConfig] = []
+    var tunnelRecords: [TunnelRecord]? = []
+    var effectiveTunnelRecords: [TunnelRecord] { tunnelRecords ?? migratedTunnelRecords }
+    private var migratedTunnelRecords: [TunnelRecord] {
+        if remoteConnection?.preferredTransport == "cloudflare", let settings = remoteConnection?.cloudflare {
+            return [TunnelRecord(id: "cloudflare-default", name: "Cloudflare", serverIDs: servers.map(\.id), transport: "cloudflare", cloudflare: settings)]
+        }
+        if mode == "individual" {
+            return servers.map { TunnelRecord(id: $0.id, name: String($0.name.prefix(96)) + " 隧道", serverIDs: [$0.id], profile: $0.profile, tunnelID: $0.tunnelID, startWithAll: $0.startWithAll) }
+        }
+        guard !servers.isEmpty || !aggregateTunnelID.isEmpty || aggregateProfileFile != nil else { return [] }
+        return [TunnelRecord(id: "aggregate", name: "聚合隧道", serverIDs: servers.map(\.id), profile: aggregateProfile, tunnelID: aggregateTunnelID, profileFile: aggregateProfileFile)]
+    }
+    enum CodingKeys: String, CodingKey {
+        case nodePath, gatewayScript, tunnelClientPath, port, aggregateTunnelID, aggregateProfile, aggregateProfileFile, mode, remoteConnection, servers, tunnelRecords
+    }
+    init() {}
+    init(from decoder: Decoder) throws {
+        let v = try decoder.container(keyedBy: CodingKeys.self)
+        nodePath = try v.decodeIfPresent(String.self, forKey: .nodePath) ?? "/opt/homebrew/bin/node"
+        gatewayScript = try v.decodeIfPresent(String.self, forKey: .gatewayScript) ?? ""
+        tunnelClientPath = try v.decodeIfPresent(String.self, forKey: .tunnelClientPath) ?? ""
+        port = try v.decodeIfPresent(Int.self, forKey: .port) ?? 8787
+        aggregateTunnelID = try v.decodeIfPresent(String.self, forKey: .aggregateTunnelID) ?? ""
+        aggregateProfile = try v.decodeIfPresent(String.self, forKey: .aggregateProfile) ?? "mcpharbor-aggregate"
+        aggregateProfileFile = try v.decodeIfPresent(String.self, forKey: .aggregateProfileFile)
+        mode = try v.decodeIfPresent(String.self, forKey: .mode) ?? "aggregate"
+        remoteConnection = try v.decodeIfPresent(RemoteConnectionSettings.self, forKey: .remoteConnection)
+        servers = try v.decodeIfPresent([ServerConfig].self, forKey: .servers) ?? []
+        if v.contains(.tunnelRecords), try v.decodeNil(forKey: .tunnelRecords) {
+            throw DecodingError.dataCorruptedError(forKey: .tunnelRecords, in: v, debugDescription: "tunnelRecords must be an array")
+        }
+        tunnelRecords = try v.decodeIfPresent([TunnelRecord].self, forKey: .tunnelRecords)
+        if tunnelRecords == nil { tunnelRecords = migratedTunnelRecords }
+    }
+}
+
+/// Each binding is an explicit snapshot. Adding a service never expands an existing tunnel.
+struct TunnelRecord: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
+    var name = "新隧道"
+    var serverIDs: [String] = []
+    var transport = "openai"
+    var profile = ""
+    var tunnelID = ""
+    var profileFile: String?
+    var cloudflare: CloudflareSettings?
+    var startWithAll: Bool?
+    var participatesInStartAll: Bool { startWithAll != false }
 }
 struct ToolInfo: Identifiable {
     var id: String { name }

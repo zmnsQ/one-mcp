@@ -153,13 +153,14 @@ final class ConfigurationApplicationTests: XCTestCase {
     }
     @MainActor func testGatewayAndTunnelReasonsReflectOnlyEffectiveSavedChanges() throws {
         try withStore { store, _ in
+            store.savedPreferences.tunnelRecords = [TunnelRecord(id: "aggregate", name: "Selected services", serverIDs: ["echo"], profile: "profile")]
             let applied = store.savedPreferences; snapshot(store, config: applied)
             let hash = ConfigurationFingerprint.scalar
             let tunnel: [String: Any] = ["type":"tunnelStatus", "key":"aggregate", "running":true,
                 "configurationFingerprintVersion":1,
                 "configurationFingerprints":["executable":hash(applied.tunnelClientPath),
-                    "profile":hash(applied.aggregateProfile), "tunnelID":hash(applied.aggregateTunnelID),
-                    "profileFile":hash(""), "endpoint":hash("http://127.0.0.1:8787/mcp")]]
+                    "profile":hash("profile"), "tunnelID":hash(""),
+                    "profileFile":hash(""), "endpoint":hash("http://127.0.0.1:8787/tunnels/aggregate/mcp"), "serverIDs":ConfigurationFingerprint.set(["echo"])]]
             store.consumeEvent(String(decoding: try JSONSerialization.data(withJSONObject: tunnel), as: UTF8.self))
             XCTAssertTrue(store.tunnelRestartReasons("aggregate").isEmpty)
             store.savedPreferences.mode = "individual"
@@ -167,10 +168,10 @@ final class ConfigurationApplicationTests: XCTestCase {
             XCTAssertTrue(store.runningTunnelKeys.contains("aggregate"))
             store.savedPreferences.port = 9988
             XCTAssertEqual(store.gatewayRestartReasons, ["监听端口"])
-            XCTAssertEqual(store.tunnelRestartReasons("aggregate"), ["网关端口"])
+            XCTAssertEqual(store.tunnelRestartReasons("aggregate"), ["网关端点"])
             XCTAssertEqual(store.endpoint(nil), "http://127.0.0.1:8787/mcp")
             store.savedPreferences.port = applied.port
-            store.savedPreferences.aggregateTunnelID = "tunnel_changed"
+            store.savedPreferences.tunnelRecords![0].tunnelID = "tunnel_changed"
             XCTAssertTrue(store.gatewayRestartReasons.isEmpty)
             XCTAssertEqual(store.tunnelRestartReasons("aggregate"), ["Tunnel ID"])
             store.consumeEvent("{\"type\":\"tunnelStatus\",\"key\":\"aggregate\",\"running\":false}")

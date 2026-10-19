@@ -124,14 +124,14 @@ export class CloudflareTunnelManager {
   private generation = 0;
   private readonly launch: NonNullable<CloudflareDependencies['spawn']>;
   private readonly fetcher: typeof fetch;
-  constructor(private port: number, private emit: (event: object) => void, private oauth: CloudflareOAuthGuard, private dependencies: CloudflareDependencies = {}) {
+  constructor(private port: number, private emit: (event: object) => void, private oauth: CloudflareOAuthGuard, private dependencies: CloudflareDependencies = {}, private readonly recordKey = 'transport:cloudflare') {
     if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid loopback port');
     this.launch = dependencies.spawn ?? ((executable, args, options) => spawn(executable, args, options));
     this.fetcher = dependencies.fetch ?? fetch;
   }
   snapshot(): object[] { return this.result ? [structuredClone(this.result)] : []; }
   private event(data: Record<string, unknown>) {
-    const event = { type: 'tunnelStatus', key: 'transport:cloudflare', provider: 'cloudflare', ...data };
+    const event = { type: 'tunnelStatus', key: this.recordKey, provider: 'cloudflare', ...data };
     this.result = event; this.emit(event);
   }
   private status(r: Running, state: string, extra: Record<string, unknown> = {}) {
@@ -155,7 +155,7 @@ export class CloudflareTunnelManager {
       const input = raw as Record<string, unknown>;
       if (!['doctor', 'run'].includes(String(input.action)) || !['quick', 'named'].includes(String(input.mode)) ||
           Object.keys(input).some(key => !['key', 'action', 'executable', 'mode', 'tunnelID', 'credentialsFile', 'publicURL'].includes(key)) ||
-          (input.key !== undefined && input.key !== 'transport:cloudflare')) return fail('CLOUDFLARE_TARGET');
+          (input.key !== undefined && input.key !== this.recordKey)) return fail('CLOUDFLARE_TARGET');
       if (!absolutePath(input.executable)) return fail('CLOUDFLARE_EXECUTABLE');
       try { if (!(await fs.stat(input.executable)).isFile()) return fail('CLOUDFLARE_EXECUTABLE'); await fs.access(input.executable, constants.X_OK); } catch { return fail('CLOUDFLARE_EXECUTABLE'); }
       const t: CloudflareTarget = { action: input.action as CloudflareTarget['action'], mode: input.mode as CloudflareTarget['mode'], executable: input.executable };
@@ -241,16 +241,16 @@ export class CloudflareTunnelManager {
         });
       } catch (error) { await r.closed; throw error; }
       if (generation !== this.generation) { await this.stop(); return fail('CLOUDFLARE_CANCELLED'); }
-      if (!this.current(r)) return { key: 'transport:cloudflare', action: t.action, submitted: true, ready: false };
+      if (!this.current(r)) return { key: this.recordKey, action: t.action, submitted: true, ready: false };
       this.status(r, t.action === 'doctor' ? 'Checking cloudflared version' : 'Process started; readiness unverified');
       if (t.action === 'doctor') {
         r.doctorTimer = setTimeout(() => { r.failure = 'CLOUDFLARE_VERSION'; void this.stop(); }, this.dependencies.doctorTimeoutMs ?? 5000);
         await r.closed;
-        return { key: 'transport:cloudflare', action: 'doctor', available: !r.failure, ...(r.failure ? { errorCode: r.failure } : { version: r.version }), ready: false };
+        return { key: this.recordKey, action: 'doctor', available: !r.failure, ...(r.failure ? { errorCode: r.failure } : { version: r.version }), ready: false };
       }
       r.timer = setInterval(() => { void this.check(r); }, this.dependencies.pollIntervalMs ?? 1000);
       void this.check(r);
-      return { key: 'transport:cloudflare', action: 'run', submitted: true, ready: false };
+      return { key: this.recordKey, action: 'run', submitted: true, ready: false };
     } catch (error) {
       if (originSet && !this.running) { try { this.setOrigin(undefined); } catch { /* Keep original safe error. */ } }
       if (error instanceof CloudflareActionError) throw error;
@@ -279,8 +279,8 @@ export class CloudflareTunnelManager {
     } catch { if (this.current(r)) this.status(r, 'Waiting for bounded loopback/public OAuth metadata checks', { localReady, publicMetadataReady: false }); }
     finally { r.checking = false; }
   }
-  async stop(key = 'transport:cloudflare'): Promise<void> {
-    if (key !== 'transport:cloudflare') return;
+  async stop(key = this.recordKey): Promise<void> {
+    if (key !== this.recordKey) return;
     this.generation++;
     const r = this.running;
     if (!r) return;

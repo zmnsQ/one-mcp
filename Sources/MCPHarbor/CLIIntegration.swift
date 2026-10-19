@@ -82,9 +82,10 @@ struct EnvironmentDiscovery: Codable { let clients: [DiscoveredClient]; let prof
     }
     func applyDiscoveredProfile(_ profile: DiscoveredProfile) {
         guard !anyProcessRunning, let id = profile.tunnelID, !id.isEmpty else { return }
-        preferences.aggregateProfile = profile.name
-        preferences.aggregateProfileFile = profile.path
-        preferences.aggregateTunnelID = id
-        notice = "已填入聚合出口名称和 ID，请核对后保存。现有认证仍留在原位置。"
+        var records = preferences.effectiveTunnelRecords
+        guard records.count < 32 else { errorMessage = "每个工作空间最多32条隧道。"; return }
+        records.append(TunnelRecord(name: profile.name, profile: profile.name, tunnelID: id, profileFile: profile.path))
+        preferences.tunnelRecords = records
+        notice = "已添加使用此 Profile 的隧道记录。请选择要绑定的 MCP 服务，再核对并保存；凭据仍留在原位置。"
     }
 }

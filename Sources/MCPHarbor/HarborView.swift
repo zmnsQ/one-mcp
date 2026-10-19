@@ -388,13 +388,8 @@ struct HarborView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 TunnelOnboardingGuide().environmentObject(store)
-                GroupBox("路由方式") {
-                    Picker("路由模式", selection: $store.preferences.mode) {
-                        Text("聚合 · 一个隧道").tag("aggregate")
-                        Text("独立 · 每个 MCP 一个隧道").tag("individual")
-                    }.pickerStyle(.segmented).padding(10)
-                    Text("聚合路由为 /mcp，独立路由为 /servers/{id}/mcp。两组本机路由同时存在；这里选择管理哪组隧道。切换前先停止隧道。").font(.caption).foregroundStyle(.secondary).padding(10)
-                }.disabled(store.tunnelStates.keys.contains { store.tunnelRunning($0) })
+                Text("每条隧道有自己的名称、MCP 服务选择、连接方式和启动设置。新增 MCP 不会自动加入已有隧道。")
+                    .font(.callout).foregroundStyle(.secondary)
                 if !store.gatewayReady {
                     Label("先点击顶部“启动网关”，再创建或复用下方连接配置。", systemImage: "info.circle")
                         .font(.callout).foregroundStyle(.secondary)
@@ -409,31 +404,9 @@ struct HarborView: View {
                     }.padding(12)
                     Form {
                         HStack { TextField("tunnel-client 绝对路径", text: $store.preferences.tunnelClientPath); Button("选择") { store.choosePath("tunnel") } }
-                        SecureField("Runtime API Key（已有 Profile 凭据可留空）", text: $store.tunnelKey)
-                        Text(TunnelSetupHints.credential(store.tunnelKey)).font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            Button("保存并自动填入") {
-                                approve("将当前 Runtime API Key 保存到此 Mac 的系统钥匙串，并允许以后打开本工作空间时自动填入？不会写入配置、导出文件或日志。") { store.saveAndRememberTunnelKey() }
-                            }.disabled(store.tunnelKey.isEmpty)
-                            Button("从钥匙串载入") { store.loadRememberedTunnelKey() }
-                            Button("忘记已存密钥", role: .destructive) {
-                                approve("删除本工作空间已保存的 Runtime API Key，并关闭自动填入？当前运行隧道不会停止，服务端密钥不会撤销。") { store.forgetRememberedTunnelKey() }
-                            }
-                        }
-                        Text(store.tunnelCredentialStatus).font(.caption).foregroundStyle(.secondary)
-                        Text("已有 Profile 的 file: 或内置凭据由官方客户端自行使用，留空不会覆盖。若 Profile 依赖 env:CONTROL_PLANE_API_KEY，请在这里提供本次值。不会自动读取或复制 Profile 文件内的凭据。").font(.caption).foregroundStyle(.secondary)
                     }.formStyle(.grouped)
                 }
-                if store.preferences.mode == "aggregate" {
-                    tunnelPanel(server: nil, index: nil)
-                } else {
-                    if !store.preferences.servers.isEmpty { serverPicker }
-                    if let index = selectedIndex {
-                        tunnelPanel(server: store.preferences.servers[index], index: index)
-                    } else {
-                        ContentUnavailableView("先添加服务器", systemImage: "network", description: Text("独立模式为每个 MCP 配置自己的隧道。"))
-                    }
-                }
+                TunnelRecordsView().environmentObject(store)
                 TunnelVerificationGuide()
                 RemoteConnectionSettingsView().environmentObject(store)
                 DisclosureGroup("连接日志与请求观测") {
@@ -512,7 +485,7 @@ struct HarborView: View {
                         }
                         ForEach(Array(store.runningTunnelKeys).sorted(), id: \.self) { key in
                             HStack {
-                                Text(key == "transport:cloudflare" ? "Cloudflare · 运行中" : key == "aggregate" ? "聚合隧道 · 运行中" : "独立隧道 \(key) · 运行中").font(.caption)
+                                Text((store.preferences.effectiveTunnelRecords.first(where: { $0.id == key })?.name ?? key) + " · 运行中").font(.caption)
                                 Spacer()
                                 Button("停止此隧道") {
                                     approve("停止这条运行中的隧道？使用此隧道的客户端会断开。") { store.stopTunnel(key) }
@@ -597,57 +570,6 @@ struct HarborView: View {
                     }.padding(.vertical, 10)
                 }
             }.padding(24)
-        }
-    }
-    private func tunnelPanel(server: ServerConfig?, index: Int?) -> some View {
-        let key = server?.id ?? "aggregate"
-        let usesExistingFile = server == nil && !(store.preferences.aggregateProfileFile?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
-        return GroupBox(server == nil ? "3 · 检查并启动聚合隧道" : "3 · 检查并启动独立隧道") {
-            VStack(alignment: .leading, spacing: 12) {
-                if !store.tunnelRestartReasons(key).isEmpty {
-                    Label("已保存修改，待重启隧道生效：" + store.tunnelRestartReasons(key).joined(separator: "、"), systemImage: "arrow.clockwise.circle")
-                        .font(.callout).foregroundStyle(.orange)
-                }
-                if let index {
-                    TextField("Tunnel ID", text: $store.preferences.servers[index].tunnelID).disabled(store.tunnelRunning(key))
-                    TextField("连接配置名称（字母、数字、短横线）", text: $store.preferences.servers[index].profile).disabled(store.tunnelRunning(key))
-                } else {
-                    TextField("Tunnel ID", text: $store.preferences.aggregateTunnelID).disabled(store.tunnelRunning(key))
-                    TextField("连接配置名称（字母、数字、短横线）", text: $store.preferences.aggregateProfile).disabled(store.tunnelRunning(key))
-                }
-                Text(TunnelSetupHints.tunnel(server?.tunnelID ?? store.preferences.aggregateTunnelID))
-                    .font(.caption).foregroundStyle(.secondary)
-                if server == nil {
-                    if let file = store.preferences.aggregateProfileFile, !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Text("使用已有文件：\(file)").font(.caption).textSelection(.enabled)
-                        Button("改用上方命名 Profile") { store.preferences.aggregateProfileFile = nil; store.tunnelProfileLocations[key] = nil }.disabled(store.tunnelRunning(key))
-                    }
-                    DisclosureGroup("可选：复用已有连接配置文件") {
-                        Text("首次使用无需选择文件。填写上方名称后点击“创建新连接配置”；已有命名配置可直接检查连接。")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Button("选择已有配置文件…") { store.choosePath("profile") }.disabled(store.tunnelRunning(key))
-                    }
-                }
-                if let location = store.tunnelProfileLocations[key] {
-                    Text("预计查找位置（按最近请求配置）：\(location)").font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                }
-                Text(usesExistingFile ? "正在复用已有文件，无需创建新配置；先检查连接，再启动隧道。" : "首次使用：创建新连接配置 → 检查连接 → 启动隧道。已有命名配置可跳过创建。")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text("下一步：\(store.tunnelNextStep(key: key))").font(.caption).foregroundStyle(.secondary)
-                Text(store.endpoint(server)).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
-                HStack { Circle().fill(store.tunnelReady[key] == true ? Color.green : Color.gray).frame(width: 8, height: 8); Text(store.tunnelStates[key] ?? "未运行").font(.caption).foregroundStyle(.secondary) }
-                if store.doctorIsCurrent(key: key) { Text("最近一次 doctor 退出码为 0；不等同 ChatGPT 调用已验证。").font(.caption).foregroundStyle(.secondary) }
-                if store.tunnelRunning(key), let base = store.tunnelHealthURLs[key] {
-                    TunnelDashboardPanel(snapshot: store.tunnelHealthSnapshots[key]).id(base.absoluteString)
-                }
-                HStack {
-                    Button("创建新连接配置") { approve("执行官方 tunnel-client init，为 \(store.endpoint(server)) 创建本机 profile？请使用新的唯一名称；若已存在请检查 CLI 输出。此操作不会启动服务。") { store.tunnelAction("init", server: server) } }.disabled(store.startAllBusy || store.hasPendingCommand(for: key) || store.tunnelRunning(key) || !store.gatewayReady || usesExistingFile)
-                    Button("检查连接") { approve("执行 tunnel-client doctor？它可能使用本次会话密钥连接 OpenAI，并检查本机 MCP 端点。") { store.tunnelAction("doctor", server: server) } }.disabled(store.startAllBusy || store.hasPendingCommand(for: key) || store.tunnelRunning(key) || !store.gatewayReady)
-                    Button("启动隧道") { approve("将本机端点接入所填 OpenAI 隧道？运行期间，获授权的 OpenAI 工作区可发现并调用白名单工具，数据与结果会发送到 OpenAI。请先核对工作区和工具白名单。") { store.tunnelAction("run", server: server) } }.buttonStyle(.glassProminent).disabled(store.startAllBusy || store.hasPendingCommand(for: key) || store.tunnelRunning(key) || !store.gatewayReady)
-                    Button("停止") { store.stopTunnel(key) }.disabled(!store.tunnelRunning(key))
-                }
-                Text("每个隧道使用系统分配的独立 loopback 管理端口；本界面持续读取 /readyz，只有实际 HTTP 200 才亮绿灯。ChatGPT 调用仍需单独验收。").font(.caption).foregroundStyle(.secondary)
-            }.textFieldStyle(.roundedBorder).padding(12)
         }
     }
     private var logPanel: some View {

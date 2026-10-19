@@ -1,3 +1,5 @@
+import { CloudflareRecordPool } from './cloudflare-records.js';
+import { TunnelBinding, validateTunnelBinding } from './tunnel-bindings.js';
 import { workspace, readJSON, preferencesSchema } from './configuration.js';
 import { RemoteAuth } from './remote-auth.js';
 import { CloudflareTunnelManager } from './cloudflare.js';
@@ -38,6 +40,9 @@ const port = portIndex >= 0 ? Number(process.argv[portIndex + 1]) : 8787;
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid loopback port');
 // Freeze actual startup settings. Saved-file edits never mutate these values.
 const configurationFingerprints = gatewayConfigurationFingerprints(process.execPath, process.argv[1] ?? '', port);
+const tunnelBindings = new Map<string, TunnelBinding>();
+const recordAuth = new Map<string, RemoteAuth>();
+const recordOrigins = new Set<string>();
 const recentEvents: Array<{sequence:number; event:object}> = [];
 let eventSequence = 0;
 const connectionJournal = new ConnectionJournal();
@@ -46,6 +51,8 @@ const publishConnectionEvent = (event: object) => {
   if (entry) process.stdout.write(JSON.stringify({type:"connectionEvent", entry}) + "\n");
 };
 const emit = (event: object) => {
+  const state = event as {type?:string; key?:string; running?:boolean};
+  if (state.type === 'tunnelStatus' && state.key && state.running === false) { tunnelBindings.delete(state.key); recordAuth.delete(state.key); recordOrigins.delete(state.key); }
   if ((event as {type?:string}).type !== "response") publishConnectionEvent(event);
   const type = (event as {type?:string}).type;
   if (type !== 'response' && type !== 'tools') {
@@ -74,6 +81,7 @@ const remoteAuth = new RemoteAuth(savedOAuth?.enabled ? savedOAuth : undefined);
 const oauthFields = remoteAuth.snapshot();
 const savedOAuthFields = savedOAuth ?? oauthFields;
 Object.assign(configurationFingerprints, {
+  tunnelRecordsVersion: configurationFingerprint(['1']),
   oauthEnabled: configurationFingerprint([String(savedOAuthFields.enabled)]),
   oauthPublicURL: configurationFingerprint([savedOAuthFields.publicURL]),
   oauthIssuer: configurationFingerprint([savedOAuthFields.issuer]),
@@ -87,6 +95,20 @@ const cloudflareManager = new CloudflareTunnelManager(port, emit, {
   setPublicOrigin: origin => {
     remoteAuth.configure(origin ? {...oauthFields, publicURL: origin + '/mcp'} : oauthFields);
   }
+});
+const cloudflareRecords = new CloudflareRecordPool(port, emit, record => {
+  const auth = new RemoteAuth(oauthFields.enabled ? {...oauthFields,
+    publicURL: record.mode === 'named' ? String(record.publicURL).replace(/\/$/, '') + '/mcp' : oauthFields.publicURL} : undefined);
+  recordAuth.set(record.key, auth);
+  return {
+    isActive: () => auth.snapshot().enabled,
+    expectedIssuer: () => auth.snapshot().issuer,
+    expectedScopes: () => auth.snapshot().scope.split(' '),
+    setPublicOrigin: (origin: string | undefined) => {
+      if (origin) { auth.configure({...oauthFields, publicURL: origin + '/mcp'}); recordOrigins.add(record.key); }
+      else { recordOrigins.delete(record.key); auth.configure(undefined); }
+    }
+  };
 });
 let closeControl: (() => Promise<void>) | undefined;
 let chain = Promise.resolve();
@@ -236,10 +258,10 @@ function publicName(id: string, tool: string): string {
   const hash = createHash('sha256').update(id + '\0' + tool).digest('hex').slice(0, 10);
   return `${id.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 10)}__${tool.replace(/[^A-Za-z0-9_]/g, '_').slice(0, 39)}_${hash}`;
 }
-function catalogue(serverId?: string): Array<{ name: string; tool: Tool; managed: Managed }> {
+function catalogue(serverId?: string, binding?: TunnelBinding): Array<{ name: string; tool: Tool; managed: Managed }> {
   const entries: Array<{ name: string; tool: Tool; managed: Managed }> = [];
   for (const m of managed.values()) {
-    if (!m.ready || m.closing || (serverId && serverId !== m.config.id)) continue;
+    if (!m.ready || m.closing || (serverId && serverId !== m.config.id) || (binding && !binding.serverIDs.includes(m.config.id))) continue;
     for (const tool of m.tools) {
       if (!m.config.allowedTools.includes(tool.name)) continue;
       entries.push({ name: serverId ? tool.name : publicName(m.config.id, tool.name), tool, managed: m });
@@ -290,19 +312,36 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
   // Reject even an empty Origin header. Never expose an unauthenticated browser endpoint.
   trace.stage("origin");
   if (req.headers.origin !== undefined) return json(res, 403, { error: 'Browser Origin requests are not allowed' });
-  if (remoteAuth.handleMetadata(req, res)) { trace.ignore(); return; }
+
   trace.stage("path");
   let path: string;
   try {
     if (!req.url?.startsWith('/') || req.url.startsWith('//')) throw new Error('Invalid path');
     path = new URL(req.url, 'http://127.0.0.1').pathname;
   } catch { return json(res, 400, { error: 'Invalid request target' }); }
-  if (path !== '/health' || ![`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host ?? '')) {
-    if (!await remoteAuth.authorize(req, res)) return;
+  const scoped = /^\/tunnels\/([A-Za-z0-9_-]{1,64})\/mcp$/.exec(path);
+  const metadata = /^\/\.well-known\/oauth-protected-resource\/tunnels\/([A-Za-z0-9_-]{1,64})\/mcp$/.exec(path);
+  const recordKey = scoped?.[1] ?? metadata?.[1];
+  const binding = recordKey ? tunnelBindings.get(recordKey) : undefined;
+  const loopbackHost = [`127.0.0.1:${port}`, `localhost:${port}`].includes(req.headers.host ?? '');
+  // The scoped path is only a loopback upstream. Public clients use the per-record proxy.
+  if (recordKey && (!binding || !loopbackHost)) return json(res, 404, {error:'Unknown tunnel record'});
+  if (recordKey && binding?.provider === 'cloudflare' && !recordOrigins.has(recordKey)) return json(res, 503, {error:'Waiting for the tunnel public origin'});
+  const auth = recordKey && binding?.provider === 'cloudflare' ? recordAuth.get(recordKey) : remoteAuth;
+  if (!auth) return json(res, 503, {error:'Tunnel authentication unavailable'});
+  if (metadata) {
+    const original = req.url;
+    try { req.url = '/.well-known/oauth-protected-resource/mcp'; if (auth.handleMetadata(req, res)) { trace.ignore(); return; } }
+    finally { req.url = original; }
+    return json(res, 404, {error:'OAuth metadata unavailable'});
+  }
+  if (!scoped && remoteAuth.handleMetadata(req, res)) { trace.ignore(); return; }
+  if (path !== '/health' || !loopbackHost) {
+    if (!await auth.authorize(req, res)) return;
   }
   if (path === '/health' && req.method === 'GET') { trace.ignore(); return json(res, 200, { status: 'ready', managedServers: [...managed.values()].filter(m => m.ready).length }); }
   const individual = /^\/servers\/([A-Za-z0-9_-]{1,64})\/mcp$/.exec(path);
-  if ((remoteAuth.snapshot().enabled && individual) || (path !== '/mcp' && !individual)) return json(res, 404, { error: 'Unknown endpoint' });
+  if ((remoteAuth.snapshot().enabled && individual) || (path !== '/mcp' && !individual && !scoped)) return json(res, 404, { error: 'Unknown endpoint' });
   trace.route(!!individual);
   const serverId = individual?.[1];
   if (serverId && !managed.get(serverId)?.ready) return json(res, 404, { error: 'Server is not running' });
@@ -327,16 +366,18 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   activeRequests.add(bridge);
   bridge.setRequestHandler(ListToolsRequestSchema, async () => {
-    const sources = [...managed.values()].filter(m => m.ready && (!serverId || m.config.id === serverId));
+    if (binding && tunnelBindings.get(binding.key) !== binding) throw new Error('Tunnel stopped or changed');
+    const sources = [...managed.values()].filter(m => m.ready && (!serverId || m.config.id === serverId) && (!binding || binding.serverIDs.includes(m.config.id)));
     const results = await Promise.allSettled(sources.map(m => discover(m)));
     // One unhealthy process must not hide tools from every other managed server.
     if (serverId && results.some(result => result.status === 'rejected')) throw new Error('Upstream tool discovery failed');
-    trace.tools(catalogue(serverId).length);
-    return { tools: catalogue(serverId).map(({ name, tool, managed: m }) => ({ ...tool, name,
+    trace.tools(catalogue(serverId, binding).length);
+    return { tools: catalogue(serverId, binding).map(({ name, tool, managed: m }) => ({ ...tool, name,
       description: `[${m.config.name}] ${tool.description ?? ''}` })) };
   });
   bridge.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
-    const route = catalogue(serverId).find(x => x.name === request.params.name);
+    if (binding && tunnelBindings.get(binding.key) !== binding) throw new Error('Tunnel stopped or changed');
+    const route = catalogue(serverId, binding).find(x => x.name === request.params.name);
     if (!route || !isCurrent(route.managed)) throw new Error('Tool is not enabled');
     const m = route.managed;
     if (m.calls >= 4) throw new Error('Upstream concurrency limit reached');
@@ -372,6 +413,14 @@ lines.on('line', line => {
     void dispatch(command).then(emit);
   } catch { emit({ type: 'log', message: 'Malformed control JSON' }); }
 });
+async function withBinding(params: Record<string, unknown>, provider: TunnelBinding['provider'], action: () => Promise<unknown>) {
+  const binding = validateTunnelBinding(params.key, params.serverIDs, provider);
+  if (tunnelBindings.has(binding.key)) throw new Error('Tunnel record is already busy; stop it before editing bindings');
+  if (params.action !== 'init' && binding.serverIDs.some(id => !managed.get(id)?.ready)) throw new Error('Start every bound MCP service before checking or running this tunnel');
+  tunnelBindings.set(binding.key, binding);
+  try { return await action(); }
+  catch (error) { if (tunnelBindings.get(binding.key) === binding) { tunnelBindings.delete(binding.key); recordAuth.delete(binding.key); recordOrigins.delete(binding.key); } throw error; }
+}
 async function perform(command: ControlRequest): Promise<ControlResponse> {
   try {
     if (closing) throw new Error('Gateway is shutting down');
@@ -386,19 +435,32 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
       case 'status': case 'snapshot': { const snapshot = { protocolVersion: 1, instanceID, controlRoot, pid: process.pid, port, workspaceID, configurationFingerprintVersion, configurationFingerprints,
         servers: [...managed.values()].map(m => ({ id: m.config.id, name: m.config.name, running: m.ready, allowedTools: m.config.allowedTools, toolCount: m.tools.length, configurationFingerprintVersion, configurationFingerprints: m.configurationFingerprints, ...(command.method === 'snapshot' ? {tools: m.tools.map(t => ({...t, publicName: publicName(m.config.id,t.name)}))} : {}) })),
         ...(command.method === 'snapshot' ? {events: recentEvents, sequence: eventSequence, requests: requestJournal.snapshot(), connectionEvents: connectionJournal.snapshot()} : {}),
-        tunnels: [...tunnelManager.snapshot(), ...cloudflareManager.snapshot()] };
+        tunnels: [...tunnelManager.snapshot(), ...cloudflareManager.snapshot(), ...cloudflareRecords.snapshot()] };
         result = command.method === 'snapshot' ? boundRuntimeSnapshot(snapshot) : snapshot;
         break; }
       case 'startServer': await start(command.params?.server); break;
-      case 'stopServer': { const id = requireID(); await cloudflareManager.stopAll(); await tunnelManager.stopAll(); await stop(id); break; }
+      case 'stopServer': { const id = requireID(); await cloudflareManager.stopAll(); await Promise.all([...tunnelBindings.values()].filter(b => b.provider === 'cloudflare' && b.serverIDs.includes(id)).map(b => cloudflareRecords.stop(b.key))); await tunnelManager.stopForServer(id); await stop(id); break; }
       case 'listTools': {
         const m = managed.get(requireID());
         if (!m?.ready) throw new Error('Server is not running');
         await discover(m);
         result = m.tools.map(t => ({ ...t, allowed: m.config.allowedTools.includes(t.name), publicName: publicName(m.config.id, t.name) })); break;
       }
-      case 'tunnelAction': result = await tunnelManager.action(command.params); break;
+      case 'tunnelAction': {
+        const params = command.params ?? {};
+        if (params.serverIDs !== undefined) result = await withBinding(params, 'openai', () => tunnelManager.action(params));
+        else {
+          if (startupPreferences?.tunnelRecords !== undefined) throw new Error('Select a tunnel record with explicit MCP bindings');
+          result = await tunnelManager.action(params);
+        }
+        break;
+      }
       case 'cloudflareAction': {
+        if (command.params?.serverIDs !== undefined) {
+          const {expectedInstanceID: _instance, ...params} = command.params;
+          result = await withBinding(params, 'cloudflare', () => cloudflareRecords.action(params)); break;
+        }
+        if (startupPreferences?.tunnelRecords !== undefined) throw new Error('Select a Cloudflare tunnel record with explicit MCP bindings');
         if (command.params?.action === 'run' && command.params?.mode === 'named' &&
             String(command.params?.publicURL ?? '').replace(/\/$/, '') + '/mcp' !== oauthFields.publicURL) {
           throw new Error('Cloudflare public URL must match the saved OAuth resource URL; save and restart first');
@@ -409,9 +471,9 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
       case 'stopTunnel': {
         const key = command.params?.key;
         if (typeof key !== 'string' || (key !== 'transport:cloudflare' && !/^[\w-]{1,64}$/.test(key))) throw new Error('Invalid tunnel key');
-        if (key === 'transport:cloudflare') await cloudflareManager.stop(); else await tunnelManager.stop(key); break;
+        if (key === 'transport:cloudflare') await cloudflareManager.stop(); else { await cloudflareRecords.stop(key); await tunnelManager.stop(key); tunnelBindings.delete(key); recordAuth.delete(key); recordOrigins.delete(key); } break;
       }
-      case 'stopAllTunnels': await cloudflareManager.stopAll(); await tunnelManager.stopAll(); break;
+      case 'stopAllTunnels': await cloudflareRecords.stopAll(); await cloudflareManager.stopAll(); await tunnelManager.stopAll(); break;
       case 'shutdown': setTimeout(() => { void shutdown(0); }, 100); break;
       default: throw new Error('Unknown management method');
     }
@@ -430,7 +492,7 @@ async function shutdown(code = 0): Promise<void> {
   httpServer.close();
   const forceExit = setTimeout(() => { httpServer.closeAllConnections(); process.exit(code); }, 8000);
   forceExit.unref();
-  await cloudflareManager.stopAll(); await tunnelManager.stopAll();
+  await cloudflareRecords.stopAll(); await cloudflareManager.stopAll(); await tunnelManager.stopAll();
   await closeControl?.();
   await Promise.all([...activeRequests].map(bridge => bridge.close().catch(() => undefined)));
   await Promise.all([...managed.values()].map(m => stopManaged(m).catch(() => undefined)));

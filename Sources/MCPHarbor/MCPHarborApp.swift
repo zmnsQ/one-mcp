@@ -41,19 +41,34 @@ import AppKit
         }
         .defaultSize(width: 1240, height: 820)
         .commands {
-            CommandGroup(after: .saveItem) { Button("Save Configuration") { store.save() }.keyboardShortcut("s") }
+            CommandGroup(after: .saveItem) { Button("保存配置") { store.save() }.keyboardShortcut("s") }
         }
         MenuBarExtra {
-            Text(store.gatewayState)
-            Button("Show One MCP") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
+            Label("网关 · " + store.menuGatewayStatus.title, systemImage: store.menuGatewayStatus.symbol)
             Divider()
-            Button("Stop All Connections") {
+            Section("MCP 服务（\(store.menuServers.count)）") {
+                if store.menuServers.isEmpty { Text("尚未添加 MCP 服务") }
+                ForEach(store.menuServers, id: \.id) { server in
+                    Label(server.name + " · " + store.menuServerStatus(server.id).title, systemImage: store.menuServerStatus(server.id).symbol)
+                }
+            }
+            Section("隧道（\(store.menuTunnelIDs.count)）") {
+                if store.menuTunnelIDs.isEmpty { Text("尚未添加隧道") }
+                ForEach(store.menuTunnelIDs, id: \.self) { id in
+                    Label(store.menuTunnelName(id) + " · " + store.menuTunnelStatus(id).title, systemImage: store.menuTunnelStatus(id).symbol)
+                }
+            }
+            Text("就绪不代表远端调用已验证")
+            Divider()
+            Button("打开 One MCP") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
+            Divider()
+            Button("停止全部连接") {
                 let alert = NSAlert(); alert.messageText = "停止共享网关及全部连接？"
                 alert.informativeText = "所有连接到此实例的 AI 和应用都会受到影响。"
                 alert.addButton(withTitle: "停止"); alert.addButton(withTitle: "取消")
                 if alert.runModal() == .alertFirstButtonReturn { store.shutdown() }
             }
-            Button("Quit") { NSApp.terminate(nil) }.keyboardShortcut("q")
+            Button("退出") { NSApp.terminate(nil) }.keyboardShortcut("q")
         } label: {
             Image(nsImage: BrandMark.menuBarImage).accessibilityLabel("One MCP")
         }

@@ -19,10 +19,18 @@ export const remoteConnectionSchema = z.object({
   oauth: z.object({enabled: z.boolean(), publicURL: cleanString(4096), issuer: cleanString(4096), jwksURL: cleanString(4096), scope: cleanString(512)}).optional(),
   cloudflare: z.object({executable: cleanString(4096), mode: z.enum(['quick','named']), tunnelID: cleanString(256), credentialsFile: cleanString(4096), publicURL: cleanString(4096)}).optional()
 }).strict();
+export const tunnelRecordSchema = z.object({
+    id: identifier, name: cleanString(100).min(1), serverIDs: z.array(identifier).max(16).refine(unique),
+    transport: z.enum(['openai', 'cloudflare']), profile: cleanString(256), tunnelID: cleanString(256),
+    profileFile: cleanString(4096).optional(), cloudflare: remoteConnectionSchema.shape.cloudflare,
+    startWithAll: z.boolean().optional()
+}).strict();
+export type TunnelRecord = z.infer<typeof tunnelRecordSchema>;
 export const preferencesSchema = z.object({
     nodePath: cleanString(4096), gatewayScript: cleanString(4096), tunnelClientPath: cleanString(4096), port: z.number().int().min(1024).max(65535),
     aggregateTunnelID: cleanString(256), aggregateProfile: cleanString(256), aggregateProfileFile: cleanString(4096).optional(), mode: z.enum(['aggregate', 'individual']),
   remoteConnection: remoteConnectionSchema.optional(),
+    tunnelRecords: z.array(tunnelRecordSchema).max(32).refine(records => unique(records.map(r => r.id))).optional(),
     servers: z.array(serverSchema).max(16).refine(s => unique(s.map(x => x.id)))
 });
 export type Preferences = z.infer<typeof preferencesSchema>;
@@ -77,7 +85,8 @@ export async function workspace(root: string, chosen?: string) {
             throw e;
         loaded = { data: defaults(), revision: 'missing' };
     }
-    const config = preferencesSchema.parse(loaded.data);
+    const parsed = preferencesSchema.parse(loaded.data);
+    const config: Preferences = {...parsed, tunnelRecords: configuredTunnelRecords(parsed)};
     return { root, id, path, index, config, revision: loaded.revision };
 }
 export type Workspace = Awaited<ReturnType<typeof workspace>>;
@@ -253,3 +262,15 @@ export async function runtimeServer(s: ServerConfig): Promise<Record<string, unk
     return { id: s.id, name: s.name, executable: s.executable, arguments: s.arguments, workingDirectory: s.workingDirectory, allowedTools: s.allowedTools, environment };
 }
 
+
+/** Read-only compatibility projection. An explicit empty list means no tunnels.
+ * Bindings are a snapshot: adding a server never expands a migrated record. */
+export function configuredTunnelRecords(config: Preferences): TunnelRecord[] {
+    if (config.tunnelRecords !== undefined) return structuredClone(config.tunnelRecords);
+    if (config.remoteConnection?.preferredTransport === 'cloudflare' && config.remoteConnection.cloudflare) {
+        return [{id:'cloudflare-default', name:'Cloudflare', serverIDs:config.servers.map(s => s.id), transport:'cloudflare', profile:'', tunnelID:'', cloudflare:config.remoteConnection.cloudflare}];
+    }
+    if (config.mode === 'individual') return config.servers.map(s => ({id:s.id, name:s.name, serverIDs:[s.id], transport:'openai', profile:s.profile, tunnelID:s.tunnelID, startWithAll:s.startWithAll}));
+    if (!config.servers.length && !config.aggregateTunnelID && config.aggregateProfileFile === undefined) return [];
+    return [{id:'aggregate', name:'聚合隧道', serverIDs:config.servers.map(s => s.id), transport:'openai', profile:config.aggregateProfile, tunnelID:config.aggregateTunnelID, profileFile:config.aggregateProfileFile}];
+}

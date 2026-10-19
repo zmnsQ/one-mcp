@@ -12,7 +12,7 @@ enum AIManagementPrompt {
               workspace.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil else { throw PromptError.invalidContext }
         let prefix = shellQuote(node) + " " + shellQuote(cli)
         let options = " --home " + shellQuote(root) + " --workspace " + shellQuote(workspace) + " --json"
-        let commands = ["status", "config validate", "servers list", "environment inspect"].map { prefix + " " + $0 + options }.joined(separator: "\n")
+        let commands = ["status", "config validate", "servers list", "tunnels list", "environment inspect"].map { prefix + " " + $0 + options }.joined(separator: "\n")
         let references = [skill.map { "随应用附带的 Skill 文件（尚未安装到你的 Agent）：\(shellQuote($0))" },
                           documentation.map { "CLI 使用文档：\(shellQuote($0))" }].compactMap { $0 }.joined(separator: "\n")
         return """

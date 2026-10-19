@@ -117,6 +117,7 @@ extension TunnelOnboardingTests {
         let store = HarborStore(configurationFileURL: root.appendingPathComponent("settings.json"), startWatcher: false)
         store.isAttachedGateway = true
         store.savedPreferences.servers = [ServerConfig(id: "cloudflare")]
+        store.savedPreferences.tunnelRecords = [TunnelRecord(id: "cloudflare", name: "Named record", serverIDs: ["cloudflare"])]
         store.runningTunnelKeys = ["cloudflare", "transport:cloudflare"]
         XCTAssertTrue(store.tunnelRestartReasons("cloudflare").isEmpty)
         XCTAssertEqual(store.tunnelRestartReasons("transport:cloudflare"), ["配置已移除"])

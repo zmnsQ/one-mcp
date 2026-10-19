@@ -125,7 +125,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         let oldID = currentWorkspaceID, oldWorkspaces = workspaces, oldReadable = storageReadable, oldRevision = savedRevision
         let record = WorkspaceRecord(id: UUID().uuidString.lowercased(), name: name)
         workspaces.append(record); currentWorkspaceID = record.id
-        preferences.servers = []; preferences.aggregateTunnelID = ""; preferences.aggregateProfileFile = nil; preferences.remoteConnection = nil
+        preferences.servers = []; preferences.tunnelRecords = []; preferences.aggregateTunnelID = ""; preferences.aggregateProfileFile = nil; preferences.remoteConnection = nil
         preferences.aggregateProfile = "mcpharbor-" + String(record.id.prefix(8))
         storageReadable = true
         savedRevision = configurationRevision()
@@ -165,20 +165,20 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         } catch { errorMessage = "工作空间未切换：\(error.localizedDescription)" }
     }
     func clearRuntimeState() {
-        healthTasks.values.forEach { $0.cancel() }; healthTasks = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil; requestTraces = []; connectionEvents = []
+        healthTasks.values.forEach { $0.cancel() }; healthTasks = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil; recordCloudflarePublicURLs = [:]; requestTraces = []; connectionEvents = []
         clearPendingCommands(); gateway = nil; tunnels = [:]; gatewayState = "Stopped"
-        runtimeValues = [:]; tunnelKey = ""; redactionValues = []; tools = [:]; states = [:]; tunnelStates = [:]
+        runtimeValues = [:]; tunnelKey = ""; recordTunnelKeys = [:]; redactionValues = []; tools = [:]; states = [:]; tunnelStates = [:]; tunnelMenuStates = [:]
         logs = []; notice = nil; toolChanges = [:]; selectedID = nil; doctorPassed = [:]; tunnelReady = [:]; initializedTargets = [:]; checkedTargets = [:]
     }
     private var vaultAccounts: [String] {
-        preferences.servers.flatMap { server in server.environmentKeys.map { credentialKey(serverID: server.id, variable: $0) } } + ["__tunnel_key"]
+        preferences.servers.flatMap { server in server.environmentKeys.map { credentialKey(serverID: server.id, variable: $0) } } + ["__tunnel_key"] + preferences.effectiveTunnelRecords.map { "__tunnel_record:" + $0.id }
     }
     func saveCredentialsToKeychain() {
         do {
             try validatePreferences(preferences, requireInstalled: false)
             var count = 0
             for key in vaultAccounts {
-                let value = key == "__tunnel_key" ? tunnelKey : (runtimeValues[key] ?? "")
+                let value = key == "__tunnel_key" ? tunnelKey : key.hasPrefix("__tunnel_record:") ? (recordTunnelKeys[String(key.dropFirst("__tunnel_record:".count))] ?? "") : (runtimeValues[key] ?? "")
                 if !value.isEmpty { try SecretVault.write(value, account: currentWorkspaceID + ":" + key); count += 1 }
             }
             notice = "已明确保存 \(count) 项凭据到此工作空间的 macOS Keychain。"
@@ -189,20 +189,38 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
             var count = 0
             for key in vaultAccounts {
                 if let value = try SecretVault.read(account: currentWorkspaceID + ":" + key) {
-                    if key == "__tunnel_key" { tunnelKey = value } else { runtimeValues[key] = value }; count += 1
+                    if key == "__tunnel_key" { tunnelKey = value }
+                    else if key.hasPrefix("__tunnel_record:") { recordTunnelKeys[String(key.dropFirst("__tunnel_record:".count))] = value }
+                    else { runtimeValues[key] = value }; count += 1
                 }
             }
             notice = "已从此工作空间 Keychain 载入 \(count) 项凭据。环境变量按服务器隔离；旧版共享变量凭据不会自动复用，请重新输入并明确保存。"
         } catch { errorMessage = error.localizedDescription }
     }
     func deleteSavedCredentials() {
-        do { for key in try SecretVault.accounts(prefix: currentWorkspaceID + ":") { try SecretVault.delete(account: key) }; UserDefaults.standard.removeObject(forKey: TunnelCredentialPolicy.preference(workspace: currentWorkspaceID)); tunnelCredentialStatus = "已关闭自动填入并删除已存密钥。"; notice = "已删除此工作空间的全部 Keychain 凭据（含已移除服务器引用）。" }
-        catch { errorMessage = error.localizedDescription }
+        do {
+            for key in try SecretVault.accounts(prefix: currentWorkspaceID + ":") { try SecretVault.delete(account: key) }
+            for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("OneMCP.autofillTunnelRecord.v1." + currentWorkspaceID + ".") {
+                UserDefaults.standard.removeObject(forKey: key)
+            }
+            UserDefaults.standard.removeObject(forKey: TunnelCredentialPolicy.preference(workspace: currentWorkspaceID))
+            tunnelCredentialStatus = "已关闭自动填入并删除已存密钥。"
+            notice = "已删除此工作空间的全部 Keychain 凭据（含已移除服务器引用）。"
+        } catch { errorMessage = error.localizedDescription }
     }
     func validatePreferences(_ value: Preferences, requireInstalled: Bool = true) throws {
         func invalid(_ text: String) -> Error { NSError(domain: "MCPHarbor", code: 12, userInfo: [NSLocalizedDescriptionKey: text]) }
         if let issue = RemoteConnectionValidation.issue(value.remoteConnection) { throw invalid(issue) }
-        guard ["aggregate", "individual"].contains(value.mode) else { throw invalid("出口模式无效。") }
+        let records = value.effectiveTunnelRecords
+        guard records.count <= 32, Set(records.map(\.id)).count == records.count else { throw invalid("隧道最多32个，ID不可重复。") }
+        for record in records {
+            guard record.id.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil,
+                  !record.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, record.name.count <= 100,
+                  ["openai", "cloudflare"].contains(record.transport), record.serverIDs.count <= 16,
+                  Set(record.serverIDs).count == record.serverIDs.count,
+                  record.serverIDs.allSatisfy({ id in value.servers.contains { $0.id == id } }) else { throw invalid("隧道名称、ID、连接方式或服务绑定无效。") }
+            if let issue = RemoteConnectionValidation.issue(RemoteConnectionSettings(cloudflare: record.cloudflare)) { throw invalid(issue) }
+        }
         guard (1024...65535).contains(value.port), value.servers.count <= 16 else { throw invalid("端口应为1024–65535，服务器最多16个。") }
         guard Set(value.servers.map(\.id)).count == value.servers.count else { throw invalid("服务器ID重复。") }
         for server in value.servers {
