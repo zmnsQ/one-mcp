@@ -11,9 +11,15 @@ private struct TunnelEditSession: Identifiable {
     let runtimeKey: String
 }
 
+private struct TunnelDetailSession: Identifiable {
+    let id: String
+    let workspace: String
+}
+
 struct TunnelRecordsView: View {
     @EnvironmentObject private var store: HarborStore
     @State private var editing: TunnelEditSession?
+    @State private var inspecting: TunnelDetailSession?
     @State private var startRecord: TunnelRecord?
     @State private var startPlan: Preferences?
     @State private var startWorkspace = ""
@@ -40,31 +46,14 @@ struct TunnelRecordsView: View {
                 ContentUnavailableView("还没有隧道", systemImage: "point.3.connected.trianglepath.dotted",
                                        description: Text("添加一条隧道，选择要连接的 MCP 服务。"))
             }
-            ForEach(store.preferences.effectiveTunnelRecords) { record in
-                HStack(spacing: 12) {
-                    Image(systemName: "network").font(.title3).foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack {
-                            Text(record.name).font(.headline).lineLimit(1)
-                            Label(store.menuTunnelStatus(record.id).title, systemImage: store.menuTunnelStatus(record.id).symbol)
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        Text(TunnelRecordPresentation.bindingSummary(record, servers: store.preferences.servers))
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    Spacer(minLength: 12)
-                    if store.tunnelRunning(record.id) {
-                        Button("停止", systemImage: "stop.fill") { store.stopTunnel(record.id) }
-                            .disabled(store.hasPendingCommand(for: record.id))
-                    } else {
-                        Button("启动", systemImage: "play.fill") {
-                            startRecord = record; startPlan = store.preferences; startWorkspace = store.currentWorkspaceID
-                            startRevision = store.savedRevision; showStart = true
-                        }.disabled(store.startAllBusy || !store.gatewayReady || store.hasPendingCommand(for: record.id) || record.serverIDs.isEmpty)
-                    }
-                    Button("编辑", systemImage: "slider.horizontal.3") { edit(record) }
-                }.padding(14).background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 12))
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 16)], alignment: .leading, spacing: 16) {
+                ForEach(store.preferences.effectiveTunnelRecords) { record in
+                    tunnelCard(record)
+                }
             }
+        }
+        .sheet(item: $inspecting) { session in
+            TunnelRecordDetails(session: session).environmentObject(store)
         }
         .sheet(item: $editing) { session in
             TunnelRecordEditor(session: session).environmentObject(store)
@@ -86,6 +75,145 @@ struct TunnelRecordsView: View {
             }
         }
     }
+    private func tunnelCard(_ record: TunnelRecord) -> some View {
+        let status = store.menuTunnelStatus(record.id)
+        return VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: record.transport == "openai" ? "point.3.connected.trianglepath.dotted" : "cloud.fill")
+                    .font(.title3).foregroundStyle(record.transport == "openai" ? Color.teal : Color.orange)
+                    .frame(width: 42, height: 42)
+                    .background((record.transport == "openai" ? Color.teal : Color.orange).opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(record.name).font(.headline).lineLimit(1).help(record.name)
+                    Text(record.transport == "openai" ? "OpenAI · 私有隧道" : "Cloudflare · 公网入口")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(record.transport == "openai" ? Color.teal : Color.orange)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background((record.transport == "openai" ? Color.teal : Color.orange).opacity(0.08), in: Capsule())
+                }
+                Spacer(minLength: 0)
+            }
+            HStack {
+                StatusBadge(status: status)
+                Spacer()
+                Text("\(record.serverIDs.count) 个 MCP").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("绑定服务").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                Text(TunnelRecordPresentation.bindingSummary(record, servers: store.preferences.servers))
+                    .font(.callout).lineLimit(2).frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
+                    .help(TunnelRecordPresentation.bindingSummary(record, servers: store.preferences.servers))
+            }
+            Divider()
+            HStack(spacing: 8) {
+                Button("详情", systemImage: "info.circle") {
+                    inspecting = TunnelDetailSession(id: record.id, workspace: store.currentWorkspaceID)
+                }
+                Button("编辑", systemImage: "slider.horizontal.3") { edit(record) }
+                Spacer(minLength: 0)
+                if store.tunnelRunning(record.id) {
+                    Button("停止", systemImage: "stop.fill") { store.stopTunnel(record.id) }
+                        .disabled(store.hasPendingCommand(for: record.id))
+                } else {
+                    Button("启动", systemImage: "play.fill") {
+                        startRecord = record; startPlan = store.preferences; startWorkspace = store.currentWorkspaceID
+                        startRevision = store.savedRevision; showStart = true
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(store.startAllBusy || !store.gatewayReady || store.hasPendingCommand(for: record.id) || record.serverIDs.isEmpty)
+                }
+            }.controlSize(.small)
+        }
+        .padding(18)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
+        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08)))
+    }
+}
+
+private struct TunnelRecordDetails: View {
+    @EnvironmentObject private var store: HarborStore
+    @Environment(\.dismiss) private var dismiss
+    let session: TunnelDetailSession
+    private var record: TunnelRecord? {
+        guard session.workspace == store.currentWorkspaceID else { return nil }
+        return store.preferences.effectiveTunnelRecords.first { $0.id == session.id }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(record?.name ?? "隧道详情").font(.title2.bold()).lineLimit(2)
+                    Text("只读详情 · 不会启动隧道或修改配置").font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("完成") { dismiss() }.keyboardShortcut(.cancelAction)
+            }.padding(20)
+            Divider()
+            ScrollView {
+                if let record {
+                    VStack(alignment: .leading, spacing: 18) {
+                        HStack {
+                            Label(record.transport == "openai" ? "OpenAI" : "Cloudflare", systemImage: "network").font(.headline)
+                            Spacer()
+                            StatusBadge(status: store.menuTunnelStatus(record.id))
+                        }
+                        detailSection("绑定的 MCP 服务", icon: "square.stack.3d.up") {
+                            Text(TunnelRecordPresentation.bindingSummary(record, servers: store.preferences.servers))
+                            ForEach(record.serverIDs, id: \.self) { id in
+                                Label(store.preferences.servers.first(where: { $0.id == id })?.name ?? "已移除服务：\(id)", systemImage: "server.rack")
+                            }
+                        }
+                        detailSection("连接地址", icon: "link") {
+                            HStack { Text("本地入口（仅本机）").font(.caption).foregroundStyle(.secondary); Spacer(); Button("复制") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(store.endpoint(record: record), forType: .string) } }
+                            Text(store.endpoint(record: record)).font(.callout.monospaced()).textSelection(.enabled)
+                            if record.transport == "cloudflare" {
+                                HStack { Text("公网入口").font(.caption).foregroundStyle(.secondary); Spacer(); if let url = store.recordCloudflarePublicURLs[record.id] { Button("复制") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(url, forType: .string) } } }
+                                Text(store.recordCloudflarePublicURLs[record.id] ?? "尚未观测到公网地址")
+                                    .font(.callout.monospaced()).textSelection(.enabled)
+                            }
+                        }
+                        detailSection("健康与诊断", icon: "waveform.path.ecg") {
+                            Text(store.tunnelStates[record.id] ?? "尚无运行诊断")
+                            if !store.tunnelRestartReasons(record.id).isEmpty {
+                                Label("待重启：" + store.tunnelRestartReasons(record.id).joined(separator: "、"), systemImage: "arrow.clockwise")
+                                    .foregroundStyle(.orange)
+                            }
+                            if record.transport == "openai", store.tunnelRunning(record.id), store.tunnelHealthURLs[record.id] != nil {
+                                TunnelDashboardPanel(snapshot: store.tunnelHealthSnapshots[record.id])
+                            } else {
+                                Text("暂无可展示的实时组件健康数据。请在编辑中的认证与维护里执行连接检查。")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Text("进程运行和本地就绪均不代表远端工具调用已验证。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        detailSection("记录信息", icon: "doc.text") {
+                            Text("记录 ID：\(record.id)").textSelection(.enabled)
+                            Text(record.participatesInStartAll ? "参与全部启动" : "仅单独启动")
+                            if record.transport == "openai" {
+                                Text("Profile：\(record.profile)").textSelection(.enabled)
+                                if let location = store.tunnelProfileLocations[record.id] {
+                                    Text(location).textSelection(.enabled)
+                                }
+                            }
+                        }
+                    }.padding(20)
+                } else {
+                    ContentUnavailableView("记录已改变", systemImage: "arrow.triangle.2.circlepath", description: Text("工作空间已切换或记录已删除，请关闭后重新打开。"))
+                        .padding(20)
+                }
+            }
+        }.frame(width: 620, height: 660)
+    }
+    private func detailSection<Content: View>(_ title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: icon).font(.headline)
+            content()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+    }
+
 }
 
 private struct TunnelRecordEditor: View {
@@ -157,20 +285,6 @@ private struct TunnelRecordEditor: View {
                     if busy { Label("隧道运行或操作中，停止后可修改配置。", systemImage: "info.circle").font(.caption) }
                     if contextChanged { Text("配置已在其他位置改变，请取消后重新打开。").foregroundStyle(.orange) }
                     if !session.isNew {
-                        DisclosureGroup("地址与运行详情") {
-                            VStack(alignment: .leading, spacing: 8) {
-                                Text(store.endpoint(record: session.record)).textSelection(.enabled)
-                                if let url = store.recordCloudflarePublicURLs[recordID] { Text(url).textSelection(.enabled) }
-                                Text(store.tunnelStates[recordID] ?? "未运行")
-                                if !store.tunnelRestartReasons(recordID).isEmpty {
-                                    Text("待重启：" + store.tunnelRestartReasons(recordID).joined(separator: "、"))
-                                }
-                                if store.tunnelRunning(recordID), store.tunnelHealthURLs[recordID] != nil {
-                                    TunnelDashboardPanel(snapshot: store.tunnelHealthSnapshots[recordID])
-                                }
-                                Text("就绪不代表远端工具调用已验证。")
-                            }.font(.caption).padding(.top, 8)
-                        }
                         DisclosureGroup("认证与维护") {
                             VStack(alignment: .leading, spacing: 12) {
                                 if unsaved { Text("先保存配置，再进行认证和连接检查。").font(.caption) }

@@ -44,18 +44,18 @@ import AppKit
             CommandGroup(after: .saveItem) { Button("保存配置") { store.save() }.keyboardShortcut("s") }
         }
         MenuBarExtra {
-            Label("网关 · " + store.menuGatewayStatus.title, systemImage: store.menuGatewayStatus.symbol)
+            Label { Text("网关 · " + store.menuGatewayStatus.title) } icon: { Image(nsImage: store.menuGatewayStatus.menuImage) }
             Divider()
             Section("MCP 服务（\(store.menuServers.count)）") {
                 if store.menuServers.isEmpty { Text("尚未添加 MCP 服务") }
                 ForEach(store.menuServers, id: \.id) { server in
-                    Label(server.name + " · " + store.menuServerStatus(server.id).title, systemImage: store.menuServerStatus(server.id).symbol)
+                    Label { Text(server.name + " · " + store.menuServerStatus(server.id).title) } icon: { Image(nsImage: store.menuServerStatus(server.id).menuImage) }
                 }
             }
             Section("隧道（\(store.menuTunnelIDs.count)）") {
                 if store.menuTunnelIDs.isEmpty { Text("尚未添加隧道") }
                 ForEach(store.menuTunnelIDs, id: \.self) { id in
-                    Label(store.menuTunnelName(id) + " · " + store.menuTunnelStatus(id).title, systemImage: store.menuTunnelStatus(id).symbol)
+                    Label { Text(store.menuTunnelName(id) + " · " + store.menuTunnelStatus(id).title) } icon: { Image(nsImage: store.menuTunnelStatus(id).menuImage) }
                 }
             }
             Text("就绪不代表远端调用已验证")

@@ -6,17 +6,19 @@ struct HarborView: View {
     @State private var pendingAction: (() -> Void)?
     @State private var showConfirmation = false
     private enum Section: String, CaseIterable, Identifiable, Hashable {
-        case servers, tunnels, settings
+        case dashboard, servers, tunnels, settings
         var id: String { rawValue }
         var title: String {
             switch self {
+            case .dashboard: "总览"
             case .servers: "MCP 服务"
-            case .tunnels: "ChatGPT 连接"
+            case .tunnels: "隧道"
             case .settings: "设置"
             }
         }
         var icon: String {
             switch self {
+            case .dashboard: "square.grid.2x2"
             case .servers: "shippingbox"
             case .tunnels: "network"
             case .settings: "gearshape"
@@ -24,13 +26,14 @@ struct HarborView: View {
         }
         var subtitle: String {
             switch self {
+            case .dashboard: "服务、隧道与待处理状态，一眼看清。"
             case .servers: "添加你要使用的工具服务。"
-            case .tunnels: "将允许使用的工具连接到 ChatGPT。"
+            case .tunnels: "独立管理 OpenAI 与 Cloudflare 入口。"
             case .settings: "运行环境、凭据与备份。"
             }
         }
     }
-    @State private var section: Section = .servers
+    @State private var section: Section = .dashboard
     @State private var showAddMCP = false
     @State private var importAfterAddDismiss = false
     @State private var showLogs = false
@@ -127,7 +130,7 @@ struct HarborView: View {
                                         if item.id.hasPrefix("removed:") {
                                             Button("停止已移除服务") {
                                                 let id = String(item.id.dropFirst("removed:".count))
-                                                approve("停止已从配置移除、但仍在运行的服务？这会先停止全部隧道，所有远端连接会断开；其他本机 MCP 进程继续运行。") {
+                                                approve(ServiceStopImpact.message(name: "已移除的服务")) {
                                                     store.command("stopServer", params: ["serverId": id])
                                                 }
                                             }
@@ -147,6 +150,8 @@ struct HarborView: View {
                 }
                 Divider()
                 switch section {
+                case .dashboard:
+                    OverviewDashboard(onAddService: { showAddMCP = true }, onSelectService: { id in store.selectedID = id; section = .servers }, onOpenTunnels: { section = .tunnels }, onOpenSettings: { section = .settings }, onOpenLogs: { section = .settings; showLogs = true }, confirm: { message, action in approve(message, action: action) })
                 case .servers: serverWorkspace
                 case .tunnels: tunnelSettings
                 case .settings: connectionSettings
@@ -260,7 +265,17 @@ struct HarborView: View {
             .fixedSize(horizontal: false, vertical: true)
     }
     private func approve(_ message: String, action: @escaping () -> Void) {
-        confirmation = message; pendingAction = action; showConfirmation = true
+        let workspace = store.currentWorkspaceID
+        let gateway = store.gateway
+        let bridge = store.runtimeBridge
+        confirmation = message
+        pendingAction = {
+            guard workspace == store.currentWorkspaceID, gateway === store.gateway, bridge === store.runtimeBridge else {
+                store.errorMessage = "工作空间或网关连接已改变，请重新核对后操作。"; return
+            }
+            action()
+        }
+        showConfirmation = true
     }
     private func lines(_ binding: Binding<[String]>) -> Binding<String> {
         Binding(get: { binding.wrappedValue.joined(separator: "\n") }, set: { binding.wrappedValue = $0.components(separatedBy: "\n").filter { !$0.isEmpty } })
@@ -276,7 +291,7 @@ struct HarborView: View {
                     Button("发现工具 / 启动", systemImage: "play.fill") {
                         approve("将在 Mac 上执行 \(server.executable) 及所填参数。MCP 程序具有你账户的文件与服务权限；仅白名单工具可通过网关调用。若选择包管理器，还可能执行下载的程序。确认启动？") { store.startServer(server) }
                     }.buttonStyle(.glassProminent).disabled(running || !store.gatewayReady || store.startAllBusy)
-                    Button("停止", systemImage: "stop.fill") { store.stopServer(server) }.buttonStyle(.glass).disabled(!running)
+                    Button("停止", systemImage: "stop.fill") { approve(ServiceStopImpact.message(name: server.name)) { store.stopServer(server) } }.buttonStyle(.glass).disabled(!running)
                 }
                 if !store.serverRestartReasons(server.id).isEmpty {
                     Label("已保存修改，待重启此 MCP 生效：" + store.serverRestartReasons(server.id).joined(separator: "、"), systemImage: "arrow.clockwise.circle")
@@ -474,7 +489,7 @@ struct HarborView: View {
                                     }
                                     Spacer()
                                     Button("停止此服务") {
-                                        approve("停止当前实例中的 \(server.name)？这会先停止全部隧道，所有远端连接会断开；其他本机 MCP 进程继续运行。") {
+                                        approve(ServiceStopImpact.message(name: server.name)) {
                                             store.command("stopServer", params: ["serverId": server.id])
                                         }
                                     }.disabled(!server.running)
