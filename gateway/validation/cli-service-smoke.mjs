@@ -1,0 +1,56 @@
+import assert from 'node:assert/strict';
+import {resolve} from 'node:path';
+import {CLIExecutor} from '../dist/cli-execution.js';
+import {cliServiceSchema,invocationArguments} from '../dist/cli-descriptor.js';
+import {serverSchema,runtimeServer} from '../dist/configuration.js';
+import {serverConfigurationFingerprints} from '../dist/configuration-fingerprints.js';
+import {Client} from '@modelcontextprotocol/sdk/client/index.js';
+import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
+const fixture=resolve('validation/cli-service-fixture.mjs');
+const tool={name:'inspect',description:'Test fixture',arguments:[{name:'text',type:'string',required:true},{name:'verbose',type:'boolean',flag:'--verbose',required:false}]};
+const cli={tools:[tool],timeoutMs:1000,maxOutputBytes:2048,maxConcurrent:1};
+const config={executable:process.execPath,arguments:[fixture,'echo'],workingDirectory:process.cwd(),environment:{APPROVED_TEST_SECRET:'private-fixture-value'},cli};
+assert.deepEqual(invocationArguments(tool,{text:'a;$(echo no)',verbose:true}),['a;$(echo no)','--verbose']);
+for(const input of [{},{text:123},{text:'-x'},{text:'ok',extra:'no'},{text:'\0'}])assert.throws(()=>invocationArguments(tool,input));
+assert.throws(()=>cliServiceSchema.parse({...cli,maxConcurrent:100}));assert.throws(()=>cliServiceSchema.parse({...cli,tools:[tool,tool]}));
+assert.throws(()=>new CLIExecutor({...config,cli:{...cli,tools:[]}}));assert.throws(()=>new CLIExecutor({...config,executable:''}));
+console.log('PASS descriptor/runtime validation and literal argv');
+process.env.UNAPPROVED_TEST_SECRET='ambient-private-value';
+const executor=new CLIExecutor(config);const result=await executor.call('inspect',{text:'a;$(echo no)'});
+assert.equal(result.exitCode,0);const content=JSON.parse(result.stdout);assert.equal(content.ambient,null);assert.equal(content.approved,'[redacted]');assert.equal(content.argv[0],'a;$(echo no)');
+await assert.rejects(()=>executor.call('missing',{}));await executor.close();await assert.rejects(()=>executor.call('inspect',{text:'closed'}));
+console.log('PASS environment isolation, redaction, close and unknown tool');
+const noisy=new CLIExecutor({...config,arguments:[fixture,'noisy']});const large=await noisy.call('inspect',{text:'ok'});assert.equal(large.truncated,true);assert.ok(Buffer.byteLength(large.stdout)<=2048);await noisy.close();
+const expanding=new CLIExecutor({...config,arguments:['-e',"process.stdout.write('x'.repeat(1024))"],environment:{FOO:'x'},cli:{...cli,maxOutputBytes:1024}});const expanded=await expanding.call('inspect',{text:'ok'});assert.ok(Buffer.byteLength(JSON.stringify(expanded))<=1024);assert.equal(expanded.truncated,true);await expanding.close();
+const waiting=new CLIExecutor({...config,arguments:[fixture,'wait'],cli:{...cli,timeoutMs:100}});const pending=waiting.call('inspect',{text:'ok'});await assert.rejects(()=>waiting.call('inspect',{text:'ok'}),/concurrency/);await assert.rejects(pending,/timed out/);await waiting.close();
+const cancelled=new CLIExecutor({...config,arguments:[fixture,'wait']});const controller=new AbortController();const work=cancelled.call('inspect',{text:'ok'},controller.signal);controller.abort();await assert.rejects(work,/cancelled/);await cancelled.close();
+const background=new CLIExecutor({...config,arguments:[fixture,'background']});const backgroundResult=await background.call('inspect',{text:'ok'});assert.equal(backgroundResult.exitCode,0);await background.close();
+console.log('PASS output cap, timeout, concurrency, cancellation and descendant cleanup');
+const base={id:'fixture',name:'Fixture',executable:process.execPath,arguments:[fixture,'echo'],workingDirectory:'',environmentKeys:[],allowedTools:[],tunnelID:'',profile:''};
+assert.equal(serverSchema.parse(base).kind,undefined);assert.throws(()=>serverSchema.parse({...base,kind:'cli'}));assert.throws(()=>serverSchema.parse({...base,cli}));
+const draft=serverSchema.parse({...base,kind:'cli',cli:{...cli,tools:[]},startWithAll:false});assert.equal(draft.cli.tools.length,0);
+const runtime=await runtimeServer({...base,kind:'cli',cli});assert.equal(runtime.kind,'cli');assert.deepEqual(runtime.cli,cli);
+assert.notEqual(serverConfigurationFingerprints({...runtime,environment:{}}).cli,serverConfigurationFingerprints({...runtime,environment:{},cli:{...cli,timeoutMs:2000}}).cli);
+console.log('PASS legacy config, drafts, runtime conversion and fingerprints');
+const transport=new StdioClientTransport({command:process.execPath,args:[resolve('dist/cli-adapter.js')],env:{ONEMCP_CLI_DESCRIPTOR:JSON.stringify({...config,environment:undefined,environmentKeys:['APPROVED_TEST_SECRET']}),APPROVED_TEST_SECRET:'private-fixture-value'},stderr:'pipe'});
+const client=new Client({name:'cli-fixture',version:'1'},{capabilities:{}});
+try{await client.connect(transport);const list=await client.listTools();assert.deepEqual(list.tools.map(x=>x.name),['inspect']);const called=await client.callTool({name:'inspect',arguments:{text:'stdio-real'}});assert.equal(called.isError,false);assert.match(called.content[0].text,/stdio-real/);const bad=await client.callTool({name:'inspect',arguments:{text:'safe',args:['-e','danger']}});assert.equal(bad.isError,true);console.log('PASS real MCP stdio initialize/list/call/reject');}finally{await client.close();await transport.close();}
+// Exercise the actual gateway wrapper and existing tool allowlist, not only adapter direct.
+const {spawn}=await import('node:child_process');const {createServer}=await import('node:net');const {createInterface}=await import('node:readline');
+const probe=createServer();await new Promise(r=>probe.listen(0,'127.0.0.1',r));const port=probe.address().port;await new Promise(r=>probe.close(r));
+const gateway=spawn(process.execPath,['dist/index.js','--port',String(port)],{stdio:['pipe','pipe','pipe']});
+const events=[],waiters=[];const lines=createInterface({input:gateway.stdout});lines.on('line',line=>{const event=JSON.parse(line);events.push(event);for(const fn of [...waiters])fn(event);});gateway.stderr.resume();
+const wait=predicate=>new Promise((resolve,reject)=>{const found=events.find(predicate);if(found){resolve(found);return;}const done=event=>{if(predicate(event)){clearTimeout(timer);waiters.splice(waiters.indexOf(done),1);resolve(event);}};const timer=setTimeout(()=>{waiters.splice(waiters.indexOf(done),1);reject(Error('gateway fixture timeout'));},10000);waiters.push(done);});
+let sequence=0;const rpc=async(method,params={})=>{const id=String(++sequence);gateway.stdin.write(JSON.stringify({id,method,params})+'\n');return await wait(e=>e.type==='response'&&e.id===id);};
+const call=async(method,params={})=>{const response=await fetch(`http://127.0.0.1:${port}/servers/fixture/mcp`,{method:'POST',headers:{'content-type':'application/json',accept:'application/json, text/event-stream'},body:JSON.stringify({jsonrpc:'2.0',id:++sequence,method,params})});return await response.json();};
+try{
+ const ready=await wait(e=>e.type==='ready');assert.ok(ready.configurationFingerprints.cliServiceVersion);
+ const bad=await rpc('startServer',{server:{...runtime,cli:{...cli,tools:[]}}});assert.equal(bad.ok,false);
+ const started=await rpc('startServer',{server:{...runtime,allowedTools:['inspect']}});assert.equal(started.ok,true);
+ const listing=await call('tools/list');assert.equal(listing.result.tools.length,1);
+ const called=await call('tools/call',{name:'inspect',arguments:{text:'via-gateway'}});assert.equal(called.result.isError,false);assert.match(called.result.content[0].text,/via-gateway/);
+ assert.ok((await call('tools/call',{name:'not-configured'})).error);
+ assert.equal((await rpc('stopServer',{serverId:'fixture'})).ok,true);
+ assert.equal((await rpc('shutdown')).ok,true);
+ console.log('PASS actual gateway CLI start, capability marker, whitelist routing, invalid draft denial and stop');
+}finally{lines.close();if(gateway.exitCode===null)gateway.kill('SIGTERM');}

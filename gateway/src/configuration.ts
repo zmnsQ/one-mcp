@@ -1,3 +1,4 @@
+import {cliServiceSchema} from './cli-descriptor.js';
 import fs from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, isAbsolute } from 'node:path';
@@ -8,11 +9,14 @@ const identifier = z.string().regex(/^[A-Za-z0-9_-]{1,64}$/);
 const cleanString = (max: number) => z.string().max(max).regex(/^[^\0]*$/);
 const unique = (values: string[]) => new Set(values).size === values.length;
 export const serverSchema = z.object({
+    kind: z.enum(['mcp','cli']).optional(), cli: cliServiceSchema.optional(),
     id: identifier, name: cleanString(100).min(1), executable: cleanString(4096), arguments: z.array(cleanString(8191)).max(128),
     workingDirectory: cleanString(4096), environmentKeys: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/).refine(s => s !== '__tunnel_key')).max(128).refine(unique),
     allowedTools: z.array(cleanString(256).min(1).refine(s => s !== '*')).max(500).refine(unique),
     tunnelID: cleanString(256), profile: cleanString(64), startWithAll: z.boolean().optional()
-});
+}).refine(s => s.kind === 'cli' ? !!s.cli : !s.cli, 'CLI kind and descriptor must match')
+  .refine(s => s.kind !== 'cli' || s.environmentKeys.every(k => !k.startsWith('ONEMCP_')), 'Reserved CLI environment key')
+  .refine(s => s.kind !== 'cli' || s.allowedTools.every(n => s.cli?.tools.some(t => t.name === n)), 'Undefined CLI tool in allowlist');
 // Public configuration only. Runtime keys and OAuth tokens never enter settings.json.
 export const remoteConnectionSchema = z.object({
   preferredTransport: z.enum(['openai', 'cloudflare']).optional(),
@@ -259,7 +263,7 @@ export async function runtimeServer(s: ServerConfig): Promise<Record<string, unk
             throw new Error(`Required session environment variable is missing: ${key}`);
         environment[key] = value;
     }
-    return { id: s.id, name: s.name, executable: s.executable, arguments: s.arguments, workingDirectory: s.workingDirectory, allowedTools: s.allowedTools, environment };
+    return { id: s.id, name: s.name, executable: s.executable, arguments: s.arguments, workingDirectory: s.workingDirectory, allowedTools: s.allowedTools, environment, ...(s.kind === 'cli' ? {kind: s.kind, cli: s.cli} : {}) };
 }
 
 

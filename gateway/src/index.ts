@@ -1,3 +1,5 @@
+import {cliServiceSchema, CLIServiceConfiguration} from './cli-descriptor.js';
+import {fileURLToPath} from 'node:url';
 import { CloudflareRecordPool } from './cloudflare-records.js';
 import { TunnelBinding, validateTunnelBinding } from './tunnel-bindings.js';
 import { workspace, readJSON, preferencesSchema } from './configuration.js';
@@ -23,7 +25,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { ListToolsRequestSchema, CallToolRequestSchema, ToolListChangedNotificationSchema, Tool } from '@modelcontextprotocol/sdk/types.js';
 
-type Config = { id: string; name: string; executable: string; arguments: string[];
+type Config = {kind?: 'mcp'|'cli'; cli?: CLIServiceConfiguration; id: string; name: string; executable: string; arguments: string[];
   environment: Record<string, string>; workingDirectory?: string; allowedTools: string[] };
 type Managed = { config: Config; client: Client; transport: StdioClientTransport; tools: Tool[];
   configurationFingerprints: ConfigurationFingerprints;
@@ -39,7 +41,7 @@ const portIndex = process.argv.indexOf('--port');
 const port = portIndex >= 0 ? Number(process.argv[portIndex + 1]) : 8787;
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid loopback port');
 // Freeze actual startup settings. Saved-file edits never mutate these values.
-const configurationFingerprints = gatewayConfigurationFingerprints(process.execPath, process.argv[1] ?? '', port);
+const configurationFingerprints = {...gatewayConfigurationFingerprints(process.execPath, process.argv[1] ?? '', port), cliServiceVersion:configurationFingerprint(['1'])};
 const tunnelBindings = new Map<string, TunnelBinding>();
 const recordAuth = new Map<string, RemoteAuth>();
 const recordOrigins = new Set<string>();
@@ -145,6 +147,13 @@ function validated(raw: unknown): Config {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== 'string' || value.length > 65536 || value.includes('\0')) throw new Error('Invalid environment item');
   }
   if (c.workingDirectory !== undefined && c.workingDirectory !== '' && (typeof c.workingDirectory !== 'string' || !isAbsolute(c.workingDirectory) || c.workingDirectory.includes('\0'))) throw new Error('Working directory must be absolute');
+  if (c.kind !== undefined && c.kind !== 'mcp' && c.kind !== 'cli') throw new Error('Invalid service kind');
+  if (c.kind === 'cli') {
+    c.cli = cliServiceSchema.parse(c.cli);
+    if (!c.cli.tools.length) throw new Error('Configure at least one CLI tool');
+    if (c.allowedTools.some(n => !c.cli!.tools.some(t => t.name === n))) throw new Error('CLI allowlist contains undefined tool');
+    if (Object.keys(c.environment).some(k => k.startsWith('ONEMCP_'))) throw new Error('Reserved CLI environment key');
+  } else if (c.cli !== undefined) throw new Error('CLI descriptor requires CLI kind');
   return c;
 }
 function isCurrent(m: Managed): boolean { return !closing && !m.closing && managed.get(m.config.id) === m; }
@@ -210,8 +219,13 @@ async function start(raw: unknown): Promise<void> {
   const config = validated(raw);
   if (managed.has(config.id)) throw new Error('Server already running; stop before replacing configuration');
   if (managed.size >= 16) throw new Error('At most 16 managed servers');
-  const transport = new StdioClientTransport({ command: config.executable, args: config.arguments,
-    env: config.environment, cwd: config.workingDirectory || undefined, stderr: 'pipe', maxBufferSize: 4 * 1024 * 1024 });
+  const cli = config.kind === 'cli';
+  const descriptor = cli ? JSON.stringify({executable:config.executable, arguments:config.arguments, workingDirectory:config.workingDirectory, environmentKeys:Object.keys(config.environment), cli:config.cli}) : '';
+  if (descriptor.length > 262144) throw new Error('CLI descriptor exceeds limit');
+  const transport = new StdioClientTransport({ command: cli ? process.execPath : config.executable,
+    args: cli ? [fileURLToPath(new URL('./cli-adapter.js', import.meta.url))] : config.arguments,
+    env: cli ? {...config.environment, ONEMCP_CLI_DESCRIPTOR:descriptor} : config.environment,
+    cwd: config.workingDirectory || undefined, stderr: 'pipe', maxBufferSize: 4 * 1024 * 1024 });
   const client = new Client({ name: 'mcp-harbor', version: '0.1.0' }, { capabilities: {} });
   const m: Managed = { config, configurationFingerprints: serverConfigurationFingerprints(config), transport, client, tools: [], ready: false, closing: false, calls: 0, revision: 0, catalogRevision: -1, lifetime: new AbortController() };
   // Never forward raw upstream payloads, credentials or tool arguments to UI logs.
@@ -385,7 +399,7 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
     emit({ type: 'log', serverId: m.config.id, message: `Calling enabled tool: ${route.tool.name}` });
     try {
       return await m.client.callTool({ name: route.tool.name, arguments: request.params.arguments ?? {} }, undefined,
-        { timeout: 60000, signal: AbortSignal.any([extra.signal, m.lifetime.signal]) });
+        { timeout: m.config.kind === 'cli' ? m.config.cli!.timeoutMs + 5000 : 60000, signal: AbortSignal.any([extra.signal, m.lifetime.signal]) });
     } catch (error) {
       return { isError: true, content: [{ type: 'text' as const, text: safeMessage(error, m.config) }] };
     } finally { m.calls--; }

@@ -288,8 +288,8 @@ struct HarborView: View {
                 HStack {
                     VStack(alignment: .leading) { Text(server.name).font(.largeTitle.bold()); Text(serviceStatus(server.id)).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
                     Spacer()
-                    Button("发现工具 / 启动", systemImage: "play.fill") {
-                        approve("将在 Mac 上执行 \(server.executable) 及所填参数。MCP 程序具有你账户的文件与服务权限；仅白名单工具可通过网关调用。若选择包管理器，还可能执行下载的程序。确认启动？") { store.startServer(server) }
+                    Button(server.isCLI ? "启动 CLI 服务" : "发现工具 / 启动", systemImage: "play.fill") {
+                        approve("将在 Mac 上执行 \(server.executable) 及所填参数。程序具有你账户的文件与服务权限，不是沙箱；仅白名单工具可通过网关调用。若选择包管理器，还可能执行下载的程序。确认启动？") { store.startServer(server) }
                     }.buttonStyle(.glassProminent).disabled(running || !store.gatewayReady || store.startAllBusy)
                     Button("停止", systemImage: "stop.fill") { approve(ServiceStopImpact.message(name: server.name)) { store.stopServer(server) } }.buttonStyle(.glass).disabled(!running)
                 }
@@ -310,6 +310,14 @@ struct HarborView: View {
                     .disabled(store.startAllBusy)
                 GroupBox("进程配置") {
                     Form {
+                        Picker("服务类型", selection: Binding(get: { server.kind ?? "mcp" }, set: { kind in
+                            guard kind != (store.preferences.servers[index].kind ?? "mcp") else { return }
+                            store.preferences.servers[index].kind = kind
+                            store.preferences.servers[index].cli = kind == "cli" ? CLIServiceConfiguration() : nil
+                            store.preferences.servers[index].allowedTools = []
+                            store.preferences.servers[index].startWithAll = false
+                        })) { Text("MCP 程序").tag("mcp"); Text("CLI 转 MCP").tag("cli") }
+                        Text("切换服务类型会清空工具定义与白名单，并取消参与全部启动。").font(.caption).foregroundStyle(.secondary)
                         TextField("名称", text: $store.preferences.servers[index].name)
                         TextField("可执行文件绝对路径", text: $store.preferences.servers[index].executable)
                         VStack(alignment: .leading) { Text("参数：每行一个，不需要 shell 转义").font(.caption); TextEditor(text: lines($store.preferences.servers[index].arguments)).font(.system(.body, design: .monospaced)).frame(height: 65) }
@@ -322,6 +330,11 @@ struct HarborView: View {
                             }
                         }
                     }.formStyle(.grouped).disabled(running)
+                }
+                if server.isCLI {
+                    CLIServiceEditor(configuration: Binding(get: { store.preferences.servers[index].cli ?? CLIServiceConfiguration() }, set: { store.preferences.servers[index].cli = $0 }), allowedTools: $store.preferences.servers[index].allowedTools)
+                        .disabled(running || store.startAllBusy)
+                    if let issue = CLIConfigurationValidation.issue(server) { Text(issue).font(.caption).foregroundStyle(.orange) }
                 }
                 if !server.environmentKeys.isEmpty {
                     GroupBox("仅本次会话使用的环境变量值") {

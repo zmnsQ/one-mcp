@@ -81,3 +81,7 @@ AI / CLI 保存配置后，界面会在下一次自动检查（约1秒）同步�
 ## Remote connection setup / 远程连接设置
 
 The app includes staged OpenAI Tunnel onboarding, external OAuth resource-server protection, and Cloudflare Tunnel management. See [setup, security boundaries and compatibility](docs/REMOTE_CONNECTIONS.zh-CN.md). Real macOS and provider-account acceptance testing is required before production use.
+
+## CLI 转 MCP
+
+添加服务时可选择 CLI，配置固定程序、显式工具参数和白名单，并设置超时、输出与并发上限。保存不会执行命令或自动开启隧道；首版为手工定义，不宣称任意 CLI 的 --help 可完美自动转换。详见 [CLI 服务说明](docs/CLI-SERVICES.md)。

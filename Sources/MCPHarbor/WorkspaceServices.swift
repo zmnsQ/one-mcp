@@ -224,6 +224,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         guard (1024...65535).contains(value.port), value.servers.count <= 16 else { throw invalid("端口应为1024–65535，服务器最多16个。") }
         guard Set(value.servers.map(\.id)).count == value.servers.count else { throw invalid("服务器ID重复。") }
         for server in value.servers {
+            if let issue = CLIConfigurationValidation.issue(server, requireTools: requireInstalled) { throw invalid(issue) }
             guard server.id.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil else { throw invalid("服务器ID无效。") }
             guard server.allowedTools.count <= 500, Set(server.allowedTools).count == server.allowedTools.count, server.allowedTools.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 256 && $0 != "*" }) else { throw invalid("工具白名单包含重复、空名称或过多条目。") }
             guard !server.name.isEmpty, server.name.count <= 100 else { throw invalid("服务器名称须为1–100字。") }

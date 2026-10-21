@@ -1,3 +1,4 @@
+import type {CLIServiceConfiguration} from './cli-descriptor.js';
 import { createHash } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -28,6 +29,7 @@ function set(values: readonly string[]): string {
 }
 
 type ServerConfiguration = {
+    kind?: string; cli?: CLIServiceConfiguration;
     name: string;
     executable: string;
     arguments: readonly string[];
@@ -46,7 +48,8 @@ export function serverConfigurationFingerprints(config: ServerConfiguration): Co
         // Capture only explicitly supplied keys, before the MCP transport inherits
         // its default environment. Neither secret values nor their hashes leave here.
         environmentKeys: set(Object.keys(config.environment)),
-        allowedTools: set(config.allowedTools)
+        allowedTools: set(config.allowedTools),
+        ...(config.kind === 'cli' ? {kind: field('cli'), cli: configurationFingerprint(cliFingerprintValues(config.cli!))} : {})
     };
 }
 
@@ -75,4 +78,10 @@ export function gatewayConfigurationFingerprints(nodePath: string, gatewayScript
         gatewayScript: field(canonicalRuntimePath(gatewayScript)),
         port: field(String(port))
     };
+}
+
+export function cliFingerprintValues(cli:CLIServiceConfiguration):string[] {
+ const values=[String(cli.timeoutMs),String(cli.maxOutputBytes),String(cli.maxConcurrent),String(cli.tools.length)];
+ for(const tool of cli.tools){values.push(tool.name,tool.description,String(tool.arguments.length));for(const a of tool.arguments)values.push(a.name,a.type,a.flag??'',String(a.required),String(a.enumValues?.length??0),...(a.enumValues??[]));}
+ return values;
 }

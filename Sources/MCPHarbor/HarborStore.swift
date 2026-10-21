@@ -388,6 +388,9 @@ import AppKit
     @discardableResult func startServer(_ server: ServerConfig, persistConfiguration: Bool = true) -> Bool {
         guard !hasPendingCommand(for: server.id), states[server.id] != "running" else { return false }
         guard gatewayReady else { errorMessage = "请先启动本机网关。"; return false }
+        if server.isCLI && appliedGatewayFingerprints["cliServiceVersion"] != ConfigurationFingerprint.scalar("1") {
+            errorMessage = "当前网关不支持 CLI 服务。请更新运行组件并重新启动网关。"; return false
+        }
         guard server.executable.hasPrefix("/") else { errorMessage = "MCP可执行文件须为绝对路径。"; return false }
         var validationScope = preferences; validationScope.servers = [server]; validationScope.tunnelRecords = []
         do { try validatePreferences(validationScope) } catch { errorMessage = error.localizedDescription; return false }
@@ -399,6 +402,11 @@ import AppKit
         }
         var config: [String: Any] = ["id": server.id, "name": server.name, "executable": server.executable,
             "arguments": server.arguments, "environment": environment, "allowedTools": server.allowedTools]
+        config["kind"] = server.kind ?? "mcp"
+        if server.isCLI, let cli = server.cli {
+            do { config["cli"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(cli)) }
+            catch { errorMessage = "CLI 配置无法编码。"; return false }
+        }
         if !server.workingDirectory.isEmpty { config["workingDirectory"] = server.workingDirectory }
         guard !persistConfiguration || save() else { return false }
         if command("startServer", params: ["server": config]) { states[server.id] = "starting"; return true }

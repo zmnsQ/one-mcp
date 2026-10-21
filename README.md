@@ -12,6 +12,7 @@ One MCP is a native macOS application for organizing local MCP servers, choosing
 
 ## What it does
 
+- **Wrap a CLI deliberately** — select CLI service type, define explicit typed tools and bounded execution; see [CLI services](docs/CLI-SERVICES.md). No automatic arbitrary-command exposure.
 - **Organize workspaces** — keep server configuration and credential namespaces separate between projects.
 - **Import deliberately** — preview selected MCP JSON files, deduplicate candidates, and merge without copying secret values or starting processes.
 - **Expose only selected tools** — per-server allowlists start empty; discovery and execution remain explicit operations.

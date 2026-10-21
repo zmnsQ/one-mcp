@@ -17,9 +17,11 @@ enum ConfigurationFingerprint {
         strings(Set(values.map { Data($0.utf8) }).sorted { $0.lexicographicallyPrecedes($1) }.map { String(decoding: $0, as: UTF8.self) })
     }
     static func server(_ server: ServerConfig) -> [String: String] {
-        ["name": scalar(server.name), "executable": scalar(server.executable), "arguments": strings(server.arguments),
+        var values = ["name": scalar(server.name), "executable": scalar(server.executable), "arguments": strings(server.arguments),
          "workingDirectory": scalar(server.workingDirectory), "environmentKeys": set(server.environmentKeys),
          "allowedTools": set(server.allowedTools)]
+        if server.isCLI { values["kind"] = scalar("cli"); values["cli"] = strings(server.cli?.fingerprintValues ?? []) }
+        return values
     }
     static func decode(_ event: [String: Any]) -> [String: String] {
         guard event["configurationFingerprintVersion"] as? Int == 1 else { return [:] }
@@ -56,8 +58,11 @@ struct ConfigurationApplicationNotice: Identifiable {
         if fingerprints["allowedTools"] == nil, let live = sharedRuntimeServers.first(where: { $0.id == id }), live.permissionsKnown {
             fingerprints["allowedTools"] = ConfigurationFingerprint.set(live.allowedTools)
         }
-        return ConfigurationFingerprint.changed(ConfigurationFingerprint.server(saved), applied: fingerprints,
-            labels: [("name", "工具说明名称"), ("executable", "程序"), ("arguments", "参数"), ("workingDirectory", "工作目录"),
+        if saved.isCLI && fingerprints["kind"] == nil && fingerprints["executable"] != nil { fingerprints["kind"] = ConfigurationFingerprint.scalar("mcp") }
+        var desired = ConfigurationFingerprint.server(saved)
+        if fingerprints["kind"] != nil && !saved.isCLI { desired["kind"] = ConfigurationFingerprint.scalar("mcp"); desired["cli"] = ConfigurationFingerprint.strings([]) }
+        return ConfigurationFingerprint.changed(desired, applied: fingerprints,
+            labels: [("kind", "服务类型"), ("cli", "CLI 工具配置"), ("name", "工具说明名称"), ("executable", "程序"), ("arguments", "参数"), ("workingDirectory", "工作目录"),
                      ("environmentKeys", "环境变量名称"), ("allowedTools", "工具白名单")])
     }
     func tunnelRestartReasons(_ key: String) -> [String] {

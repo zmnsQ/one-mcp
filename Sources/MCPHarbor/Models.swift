@@ -10,6 +10,9 @@ struct ServerConfig: Codable, Identifiable, Hashable {
     var allowedTools: [String] = []
     var tunnelID = ""
     var profile = ""
+    var kind: String?
+    var cli: CLIServiceConfiguration?
+    var isCLI: Bool { kind == "cli" }
     var startWithAll: Bool?
     var participatesInStartAll: Bool { startWithAll != false }
 }
@@ -127,5 +130,61 @@ struct CloudflareSettings: Codable, Equatable {
         tunnelID = try values.decodeIfPresent(String.self, forKey: .tunnelID) ?? ""
         credentialsFile = try values.decodeIfPresent(String.self, forKey: .credentialsFile) ?? ""
         publicURL = try values.decodeIfPresent(String.self, forKey: .publicURL) ?? ""
+    }
+}
+
+struct CLIServiceConfiguration: Codable, Hashable {
+    var tools: [CLIToolDefinition] = []
+    var timeoutMs = 30000
+    var maxOutputBytes = 65536
+    var maxConcurrent = 1
+    var fingerprintValues: [String] {
+        var values = [String(timeoutMs), String(maxOutputBytes), String(maxConcurrent), String(tools.count)]
+        for tool in tools {
+            values += [tool.name, tool.description, String(tool.arguments.count)]
+            for arg in tool.arguments {
+                values += [arg.name, arg.type, arg.flag ?? "", arg.required ? "true" : "false", String(arg.enumValues?.count ?? 0)]
+                values += arg.enumValues ?? []
+            }
+        }
+        return values
+    }
+}
+struct CLIToolDefinition: Codable, Hashable {
+    var name = ""
+    var description = ""
+    var arguments: [CLIArgument] = []
+}
+struct CLIArgument: Codable, Hashable {
+    var name = ""
+    var type = "string"
+    var flag: String?
+    var required = false
+    var enumValues: [String]?
+}
+enum CLIConfigurationValidation {
+    static func issue(_ server: ServerConfig, requireTools: Bool = false) -> String? {
+        guard ["mcp", "cli"].contains(server.kind ?? "mcp") else { return "服务类型必须为 MCP 或 CLI。" }
+        guard server.isCLI else { return server.cli == nil ? nil : "MCP 服务不能带有 CLI 配置。" }
+        guard !server.environmentKeys.contains(where: { $0.hasPrefix("ONEMCP_") }) else { return "CLI 环境变量不能使用 ONEMCP_ 保留前缀。" }
+        guard let cli = server.cli else { return "CLI 服务缺少工具配置。" }
+        guard (100...120000).contains(cli.timeoutMs), (1024...1048576).contains(cli.maxOutputBytes), (1...4).contains(cli.maxConcurrent) else { return "CLI 限制：超时 100–120000 毫秒、输出 1024–1048576 字节、并发 1–4。" }
+        func nameOK(_ value: String) -> Bool { value.range(of: "^[A-Za-z][A-Za-z0-9_]{0,63}$", options: .regularExpression) != nil && !["constructor", "prototype", "__proto__"].contains(value) }
+        guard (!requireTools || !cli.tools.isEmpty), cli.tools.count <= 32, Set(cli.tools.map(\.name)).count == cli.tools.count else { return "CLI 工具须为1–32个，名称不可重复。" }
+        for tool in cli.tools {
+            guard nameOK(tool.name), tool.description.utf16.count <= 1000, !tool.description.contains("\0"), tool.arguments.count <= 32, Set(tool.arguments.map(\.name)).count == tool.arguments.count else { return "CLI 工具名称、描述或参数列表无效。" }
+            let flags = tool.arguments.compactMap(\.flag)
+            guard Set(flags).count == flags.count else { return "CLI 选项名不可重复。" }
+            for arg in tool.arguments {
+                guard nameOK(arg.name), ["string", "number", "boolean"].contains(arg.type) else { return "CLI 参数名称或类型无效。" }
+                if let flag = arg.flag, flag.range(of: "^--[A-Za-z][A-Za-z0-9-]{0,63}$", options: .regularExpression) == nil { return "CLI 选项须为 --option；位置参数请留空。" }
+                if arg.type == "boolean", arg.flag == nil { return "布尔参数必须设置选项名。" }
+                if let values = arg.enumValues {
+                    guard arg.type == "string", !values.isEmpty, values.count <= 100, Set(values).count == values.count, values.allSatisfy({ !$0.isEmpty && !$0.hasPrefix("-") && $0.utf16.count <= 8192 && !$0.contains("\0") }) else { return "枚举仅支持字符串参数，请填入不重复的非空值。" }
+                }
+            }
+        }
+        guard Set(server.allowedTools).isSubset(of: Set(cli.tools.map(\.name))) else { return "CLI 白名单含未定义的工具。" }
+        return nil
     }
 }
