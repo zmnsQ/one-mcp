@@ -37,7 +37,8 @@ struct HarborView: View {
     @State private var showAddMCP = false
     @State private var importAfterAddDismiss = false
     @State private var showLogs = false
-    @State private var showStartAllResults = true
+    @State private var showDiagnostics = false
+    @State private var showRuntimeInstances = false
     @State private var toolSearch = ""
     @State private var showWorkspaceSheet = false
     @State private var workspaceName = ""
@@ -60,33 +61,12 @@ struct HarborView: View {
                         Label(item.title, systemImage: item.icon).tag(item)
                     }
                 }.listStyle(.sidebar)
-                VStack(alignment: .leading, spacing: 6) {
-                    Label(store.gatewayReady ? "本地网关运行中" : "网关未就绪", systemImage: store.gatewayReady ? "checkmark.circle.fill" : "circle")
-                        .font(.caption).foregroundStyle(store.gatewayReady ? Color.green : Color.secondary)
-                    Text("仅监听本机 · 工具默认不开放").font(.caption2).foregroundStyle(.secondary)
-                }.padding()
+                SidebarRuntimeControls(confirm: { message, action in approve(message, action: action) })
             }
             .navigationSplitViewColumnWidth(min: 245, ideal: 265)
         } detail: {
             VStack(spacing: 0) {
                 header
-                if !store.startAllSteps.isEmpty {
-                    DisclosureGroup(store.startAllBusy ? "全部启动进行中…" : "全部启动结果（再次点击可重试未启动项）", isExpanded: $showStartAllResults) {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 6) {
-                                ForEach(store.startAllSteps) { step in
-                                    HStack(alignment: .top) {
-                                        Image(systemName: step.status == "failed" ? "exclamationmark.triangle" : (step.status == "succeeded" ? "checkmark.circle" : "circle"))
-                                        Text(step.title).fontWeight(.medium)
-                                        Text(step.detail).foregroundStyle(.secondary)
-                                        Spacer()
-                                    }.font(.caption)
-                                }
-                            }
-                        }.frame(maxHeight: 160)
-                        if store.startAllBusy { Button("取消后续启动") { store.cancelStartAll() } }
-                    }.padding(.horizontal, 24).padding(.vertical, 8)
-                }
                 if store.legacyCandidateJSON != nil {
                     HStack {
                         Text("发现同一工作空间的旧版网关（PID \(store.legacyGatewayPID)），可停止后由新版接管。").font(.caption)
@@ -151,7 +131,7 @@ struct HarborView: View {
                 Divider()
                 switch section {
                 case .dashboard:
-                    OverviewDashboard(onAddService: { showAddMCP = true }, onSelectService: { id in store.selectedID = id; section = .servers }, onOpenTunnels: { section = .tunnels }, onOpenSettings: { section = .settings }, onOpenLogs: { section = .settings; showLogs = true }, confirm: { message, action in approve(message, action: action) })
+                    OverviewDashboard(onAddService: { showAddMCP = true }, onSelectService: { id in store.selectedID = id; section = .servers }, onOpenTunnels: { section = .tunnels }, onOpenSettings: { section = .settings }, onOpenLogs: { section = .settings; showDiagnostics = true; showLogs = true }, confirm: { message, action in approve(message, action: action) })
                 case .servers: serverWorkspace
                 case .tunnels: tunnelSettings
                 case .settings: connectionSettings
@@ -230,6 +210,7 @@ struct HarborView: View {
                 }
             }
         }
+        .disclosureGroupStyle(FullRowDisclosureStyle())
     }
 
     private var header: some View {
@@ -241,25 +222,6 @@ struct HarborView: View {
             Spacer()
             if store.hasUnsavedChanges { Label("有未保存修改", systemImage: "circle.fill").font(.caption).foregroundStyle(.orange) }
             if !store.pendingCommands.isEmpty { Text("等待网关确认：\(store.pendingCommands.count)").font(.caption).foregroundStyle(.secondary) }
-            Label(store.gatewayReady ? (store.isAttachedGateway ? "已连接共享网关" : "本地网关运行中") : (store.gatewayStartBusy ? "正在检查网关" : (store.gatewayState == "Disconnected" ? "网关连接已断开" : (store.isGatewayRunning ? "正在启动" : "网关未启动"))), systemImage: "circle.fill")
-                .font(.caption).foregroundStyle(store.gatewayReady ? Color.green : Color.secondary)
-            Button(store.startAllBusy ? "正在全部启动…" : "全部启动", systemImage: "play.circle.fill") {
-                let plan = store.preferences, workspace = store.currentWorkspaceID, revision = store.savedRevision
-                approve(store.startAllConfirmation) {
-                    store.startAll(expectedPlan: plan, expectedWorkspace: workspace, expectedRevision: revision)
-                }
-            }.buttonStyle(.glassProminent)
-                .disabled(store.startAllBusy || store.takeoverBusy || store.hasUnsavedChanges)
-                .help(store.hasUnsavedChanges ? "请先保存修改，再全部启动" : "依次启动网关、参与的 MCP 和所选方式的已有连接")
-            if store.isGatewayRunning {
-                Button("停止网关", systemImage: "stop.fill") {
-                    approve("停止此共享网关及其连接？所有连接到该实例的 AI 和应用都会受到影响。") { store.stopGateway() }
-                }.disabled(store.takeoverBusy)
-            } else {
-                Button(store.gatewayState == "Disconnected" ? "重新连接 / 启动" : "启动网关", systemImage: "play.fill") {
-                    approve("启动本机 OneMCP 网关？不会自动连接远端隧道或启动 MCP 服务。") { store.startGateway() }
-                }.buttonStyle(.glassProminent).disabled(!store.runtimeFilesReady || store.takeoverBusy || store.gatewayStartBusy)
-            }
 
         }.padding(.horizontal, 24).padding(.vertical, 18)
             .fixedSize(horizontal: false, vertical: true)
@@ -481,123 +443,170 @@ struct HarborView: View {
     }
     private var connectionSettings: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
-                GroupBox(store.isAttachedGateway ? "已连接现有网关" : "运行状态") {
-                    VStack(alignment: .leading, spacing: 16) {
-                        Label(store.gatewayReady ? "本地网关运行中，ChatGPT 未验证" : (store.gatewayStartBusy ? "正在检查网关" : (store.gatewayState == "Disconnected" ? "共享连接已断开，网关状态未确认" : (store.isGatewayRunning ? "正在启动" : (store.runtimeFilesReady ? "已准备好，尚未启动" : "需要检查运行环境")))),
-                              systemImage: store.gatewayReady ? "checkmark.circle.fill" : "desktopcomputer")
-                            .font(.headline).foregroundStyle(store.gatewayReady ? Color.green : Color.primary)
-                        Text(store.isAttachedGateway ? "与 AI 共用当前网关。这里的操作会作用于同一实例；退出本应用只断开界面连接。" : (store.gatewayReady ? "返回 MCP 服务，添加或启动你需要的工具。" : store.runtimeSetupSummary))
-                            .font(.callout).foregroundStyle(.secondary)
-                        if store.runtimeComparisonUnavailable {
-                            Text("当前网关版本尚未提供完整逐项配置对比。已保存配置会正常同步；无法确认的项目不会被标为已生效。")
-                                .font(.caption).foregroundStyle(.orange)
-                        }
-                        if !store.sharedRuntimeServers.isEmpty {
-                            ForEach(store.sharedRuntimeServers) { server in
-                                HStack {
-                                    VStack(alignment: .leading) {
-                                        Text(server.name).font(.subheadline)
-                                        Text("当前实例：\(server.running ? "运行中" : "已停止") · " + (server.permissionsKnown ? "已授权 \(server.allowedTools.count) 个工具" : "工具授权待核对")).font(.caption).foregroundStyle(.secondary)
-                                    }
-                                    Spacer()
-                                    Button("停止此服务") {
-                                        approve(ServiceStopImpact.message(name: server.name)) {
-                                            store.command("stopServer", params: ["serverId": server.id])
-                                        }
-                                    }.disabled(!server.running)
-                                }
-                            }
-                        }
-                        ForEach(Array(store.runningTunnelKeys).sorted(), id: \.self) { key in
-                            HStack {
-                                Text((store.preferences.effectiveTunnelRecords.first(where: { $0.id == key })?.name ?? key) + " · 运行中").font(.caption)
-                                Spacer()
-                                Button("停止此隧道") {
-                                    approve("停止这条运行中的隧道？使用此隧道的客户端会断开。") { store.stopTunnel(key) }
-                                }
-                            }
-                        }
-                        HStack(spacing: 12) {
-                            Button(store.discoveryBusy ? "正在检测…" : "自动检查并修复") { store.repairEnvironment() }
-                                .disabled(store.anyProcessRunning || store.discoveryBusy)
-                                .help("检查已安装组件并修正失效路径；不会安装软件或启动服务")
-
-                        }
-                        Text("启动后只在本机运行；连接 ChatGPT 需另外设置。")
-                            .font(.caption).foregroundStyle(.secondary)
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
-                }
-                AIManagementAccessView()
-                DisclosureGroup("高级设置与检测详情") {
-                    VStack(alignment: .leading, spacing: 18) {
-                        Text("通常无需修改。自定义安装位置或排查问题时再展开使用。")
-                            .font(.caption).foregroundStyle(.secondary)
-                        GroupBox("组件路径") {
-                            VStack(alignment: .leading, spacing: 12) {
-                                Text("Node 可执行文件").font(.caption).foregroundStyle(.secondary)
-                                HStack { TextField("绝对路径", text: $store.preferences.nodePath); Button("选择…") { store.choosePath("node") } }
-                                Text("网关脚本").font(.caption).foregroundStyle(.secondary)
-                                HStack { TextField("绝对路径", text: $store.preferences.gatewayScript); Button("选择…") { store.choosePath("gateway") } }
-                                TextField("本机监听端口", value: $store.preferences.port, format: .number.grouping(.never))
-                            }.textFieldStyle(.roundedBorder).padding(12).disabled(store.isGatewayRunning)
-                        }
-                        DisclosureGroup("逐项检测结果") {
-                            VStack(alignment: .leading, spacing: 10) {
-                                ForEach(store.setupChecks) { result in
-                                    HStack(alignment: .top) {
-                                        Image(systemName: result.passed ? "checkmark.circle" : "exclamationmark.circle")
-                                            .foregroundStyle(result.passed ? Color.green : Color.orange)
-                                        VStack(alignment: .leading, spacing: 4) {
-                                            Text(result.label).font(.caption.bold())
-                                            Text(result.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                                        }
-                                    }
-                                }
-                                Button("重新检查，不修改配置") { store.checkSetup() }
-                            }.padding(.vertical, 10)
-                        }
-                        EnvironmentDiscoveryView()
-                    }.padding(.vertical, 12)
-                }
-                DisclosureGroup("密钥与登录信息") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("默认仅存在内存。可明确保存到此 Mac 的 Keychain；不会写入配置或导出文件。隧道密钥自动填入需在连接页单独启用。").font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            Button("保存到系统钥匙串") { approve("将当前工作空间已输入的环境变量值与隧道运行密钥保存到这台 Mac 的 Keychain？仅保存非空值，未来可手动载入。") { store.saveCredentialsToKeychain() } }
-                            Button("从系统钥匙串载入") { store.loadCredentialsFromKeychain() }
-                            Button("删除已存凭据", role: .destructive) { approve("删除此工作空间全部已存 Keychain 凭据（含已移除服务器）？这不会撤销服务端密钥，也不会停止现有进程。") { store.deleteSavedCredentials() } }
-                        }
-                    }.padding(12)
-                }
-                DisclosureGroup("备份与恢复") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text("备份保存当前工作空间配置，不包含凭据。恢复会替换当前配置。")
-                            .font(.caption).foregroundStyle(.secondary)
-                        HStack {
-                            Button("备份当前配置…") { store.exportConfiguration() }
-                                .help("导出配置文件，不包含凭据")
-                            Button("从备份恢复…", role: .destructive) {
-                                approve("恢复备份将替换当前工作空间的服务器配置，丢弃 env 值并清空工具白名单；不会运行程序。请先备份需要保留的配置。") { store.importConfiguration() }
-                            }.disabled(store.anyProcessRunning)
-                        }
-                    }.padding(.vertical, 10)
-                }
-                DisclosureGroup("诊断与工具说明") {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
-                            Button("导出工具说明…") { store.exportToolGuide() }
-                            Button("导出脱敏日志…") { store.exportLogs() }
-                        }
-                        DisclosureGroup("查看运行日志（\(store.logs.count) 条）", isExpanded: $showLogs) { logPanel }
-                        Button("停止全部连接", role: .destructive) { approve("停止共享网关及全部连接？所有连接到此实例的客户端都会受到影响。") { store.shutdown() } }
-                            .disabled(!store.anyProcessRunning)
-                            .help("停止当前网关、MCP 和隧道进程；保留配置")
-                    }.padding(.vertical, 10)
-                }
+            VStack(alignment: .leading, spacing: 16) {
+                runtimeSettingsCard
+                aiManagementSettingsCard
+                advancedSettingsCard
+                credentialSettingsCard
+                backupSettingsCard
+                diagnosticSettingsCard
             }.padding(24)
         }
     }
+
+    private var runtimeSettingsCard: some View {
+        SettingsSurface {
+            VStack(alignment: .leading, spacing: 14) {
+                SettingsSectionLabel(title: store.isAttachedGateway ? "共享网关与运行环境" : "运行环境",
+                    subtitle: "检查组件与运行状态；全局启停在左侧。", symbol: "desktopcomputer")
+                Divider()
+                VStack(alignment: .leading, spacing: 16) {
+                    Label(store.gatewayReady ? "本地网关运行中，ChatGPT 未验证" : (store.gatewayStartBusy ? "正在检查网关" : (store.gatewayState == "Disconnected" ? "共享连接已断开，网关状态未确认" : (store.isGatewayRunning ? "正在启动" : (store.runtimeFilesReady ? "已准备好，尚未启动" : "需要检查运行环境")))),
+                          systemImage: store.gatewayReady ? "checkmark.circle.fill" : "desktopcomputer")
+                        .font(.headline).foregroundStyle(.primary)
+                    Text(store.isAttachedGateway ? "与 AI 共用当前网关。这里的操作会作用于同一实例；退出本应用只断开界面连接。" : (store.gatewayReady ? "返回 MCP 服务，添加或启动你需要的工具。" : store.runtimeSetupSummary))
+                        .font(.callout).foregroundStyle(.secondary)
+                    if store.runtimeComparisonUnavailable {
+                        Text("当前网关版本尚未提供完整逐项配置对比。已保存配置会正常同步；无法确认的项目不会被标为已生效。")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
+                    if !store.sharedRuntimeServers.isEmpty || !store.runningTunnelKeys.isEmpty {
+                        DisclosureGroup("已连接实例与单独停止", isExpanded: $showRuntimeInstances) {
+                            if !store.sharedRuntimeServers.isEmpty {
+                                ForEach(store.sharedRuntimeServers) { server in
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(server.name).font(.subheadline)
+                                            Text("当前实例：\(server.running ? "运行中" : "已停止") · " + (server.permissionsKnown ? "已授权 \(server.allowedTools.count) 个工具" : "工具授权待核对")).font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Button("停止此服务") {
+                                            approve(ServiceStopImpact.message(name: server.name)) {
+                                                store.command("stopServer", params: ["serverId": server.id])
+                                            }
+                                        }.disabled(!server.running)
+                                    }
+                                }
+                            }
+                            ForEach(Array(store.runningTunnelKeys).sorted(), id: \.self) { key in
+                                HStack {
+                                    Text((store.preferences.effectiveTunnelRecords.first(where: { $0.id == key })?.name ?? key) + " · 运行中").font(.caption)
+                                    Spacer()
+                                    Button("停止此隧道") {
+                                        approve("停止这条运行中的隧道？使用此隧道的客户端会断开。") { store.stopTunnel(key) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    HStack(spacing: 12) {
+                        Button(store.discoveryBusy ? "正在检测…" : "自动检查并修复") { store.repairEnvironment() }
+                            .disabled(store.anyProcessRunning || store.discoveryBusy)
+                            .help("检查已安装组件并修正失效路径；不会安装软件或启动服务")
+
+                    }
+                    Text("启动后只在本机运行；连接 ChatGPT 需另外设置。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+    }
+
+    private var aiManagementSettingsCard: some View {
+        SettingsSurface { AIManagementAccessView() }
+    }
+
+    private var advancedSettingsCard: some View {
+        SettingsSurface {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text("通常无需修改。自定义安装位置或排查问题时再展开使用。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    GroupBox("组件路径") {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Node 可执行文件").font(.caption).foregroundStyle(.secondary)
+                            HStack { TextField("绝对路径", text: $store.preferences.nodePath); Button("选择…") { store.choosePath("node") } }
+                            Text("网关脚本").font(.caption).foregroundStyle(.secondary)
+                            HStack { TextField("绝对路径", text: $store.preferences.gatewayScript); Button("选择…") { store.choosePath("gateway") } }
+                            TextField("本机监听端口", value: $store.preferences.port, format: .number.grouping(.never))
+                        }.textFieldStyle(.roundedBorder).padding(12).disabled(store.isGatewayRunning)
+                    }
+                    DisclosureGroup("逐项检测结果") {
+                        VStack(alignment: .leading, spacing: 10) {
+                            ForEach(store.setupChecks) { result in
+                                HStack(alignment: .top) {
+                                    Image(systemName: result.passed ? "checkmark.circle" : "exclamationmark.circle")
+                                        .foregroundStyle(result.passed ? Color.green : Color.orange)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(result.label).font(.caption.bold())
+                                        Text(result.detail).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                                    }
+                                }
+                            }
+                            Button("重新检查，不修改配置") { store.checkSetup() }
+                        }.padding(.vertical, 10)
+                    }
+                    EnvironmentDiscoveryView()
+                }.padding(.vertical, 12)
+            } label: {
+                SettingsSectionLabel(title: "组件与高级设置", subtitle: "Node、网关路径、端口与环境检测。", symbol: "slider.horizontal.3")
+            }
+        }
+    }
+
+    private var credentialSettingsCard: some View {
+        SettingsSurface {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("默认仅存在内存。可明确保存到此 Mac 的 Keychain；不会写入配置或导出文件。隧道密钥自动填入需在连接页单独启用。").font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Button("保存到系统钥匙串") { approve("将当前工作空间已输入的环境变量值与隧道运行密钥保存到这台 Mac 的 Keychain？仅保存非空值，未来可手动载入。") { store.saveCredentialsToKeychain() } }
+                        Button("从系统钥匙串载入") { store.loadCredentialsFromKeychain() }
+                        Button("删除已存凭据", role: .destructive) { approve("删除此工作空间全部已存 Keychain 凭据（含已移除服务器）？这不会撤销服务端密钥，也不会停止现有进程。") { store.deleteSavedCredentials() } }
+                    }
+                }.padding(12)
+            } label: {
+                SettingsSectionLabel(title: "密钥与登录信息", subtitle: "凭据仅在明确保存后存入系统钥匙串。", symbol: "key")
+            }
+        }
+    }
+
+    private var backupSettingsCard: some View {
+        SettingsSurface {
+            DisclosureGroup {
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("备份保存当前工作空间配置，不包含凭据。恢复会替换当前配置。")
+                        .font(.caption).foregroundStyle(.secondary)
+                    HStack {
+                        Button("备份当前配置…") { store.exportConfiguration() }
+                            .help("导出配置文件，不包含凭据")
+                        Button("从备份恢复…", role: .destructive) {
+                            approve("恢复备份将替换当前工作空间的服务器配置，丢弃 env 值并清空工具白名单；不会运行程序。请先备份需要保留的配置。") { store.importConfiguration() }
+                        }.disabled(store.anyProcessRunning)
+                    }
+                }.padding(.vertical, 10)
+            } label: {
+                SettingsSectionLabel(title: "备份与恢复", subtitle: "导出或恢复当前工作空间配置，不包含凭据。", symbol: "externaldrive")
+            }
+        }
+    }
+
+    private var diagnosticSettingsCard: some View {
+        SettingsSurface {
+            DisclosureGroup(isExpanded: $showDiagnostics) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Button("导出工具说明…") { store.exportToolGuide() }
+                        Button("导出脱敏日志…") { store.exportLogs() }
+                    }
+                    DisclosureGroup("查看运行日志（\(store.logs.count) 条）", isExpanded: $showLogs) { logPanel }
+                }.padding(.vertical, 10)
+            } label: {
+                SettingsSectionLabel(title: "诊断与工具说明", subtitle: "查看运行日志、导出脱敏诊断与工具说明。", symbol: "stethoscope")
+            }
+        }
+    }
+
     private var logPanel: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack { Label("实时日志", systemImage: "waveform.path").font(.caption.bold()); Spacer(); Text("仅内存 · 最近 1,000 行").font(.caption).foregroundStyle(.secondary); Button("清空") { store.logs.removeAll() }.controlSize(.small) }

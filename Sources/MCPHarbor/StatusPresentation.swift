@@ -4,11 +4,11 @@ import AppKit
 extension MenuBarStatus {
     var color: Color { Color(nsColor: indicatorColor) }
     private var indicatorColor: NSColor {
-        switch self {
-        case .running, .ready: return .systemGreen
-        case .starting, .checking, .stopping: return .systemOrange
-        case .failed: return .systemRed
-        case .stopped, .unknown: return .secondaryLabelColor
+        switch tone {
+        case .positive: return .systemGreen
+        case .warning: return .systemOrange
+        case .negative: return .systemRed
+        case .neutral: return .secondaryLabelColor
         }
     }
     /// Native NSMenu can discard SwiftUI foreground styles. Render actual colored pixels,

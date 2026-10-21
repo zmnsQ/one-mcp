@@ -1,6 +1,8 @@
 import Foundation
 
 /// Presentation state only: fed by the existing runtime event stream, never a new poller.
+enum StatusTone { case positive, warning, negative, neutral }
+
 enum MenuBarStatus: Equatable {
     case running, ready, starting, stopping, stopped, checking, failed, unknown
 
@@ -24,6 +26,14 @@ enum MenuBarStatus: Equatable {
         case .stopped: return "stop.circle"
         case .failed: return "exclamationmark.triangle.fill"
         case .unknown: return "questionmark.circle"
+        }
+    }
+    var tone: StatusTone {
+        switch self {
+        case .running, .ready: return .positive
+        case .starting, .checking, .stopping: return .warning
+        case .failed: return .negative
+        case .stopped, .unknown: return .neutral
         }
     }
     static func server(_ raw: String?) -> Self {
@@ -56,6 +66,21 @@ enum MenuBarStatus: Equatable {
         case "Disconnected": return .unknown
         default: return raw.hasPrefix("Stopped (exit ") ? .failed : .unknown
         }
+    }
+}
+
+/// Counts only observed live states; disconnected/unknown is never reported as running.
+struct RuntimeStatusSummary: Equatable {
+    let gateway: MenuBarStatus
+    let servers: [MenuBarStatus]
+    let tunnels: [MenuBarStatus]
+    var runningServers: Int { servers.filter { $0 == .running || $0 == .ready }.count }
+    var runningTunnels: Int { tunnels.filter { $0 == .running || $0 == .ready }.count }
+    var failureCount: Int { ([gateway] + servers + tunnels).filter { $0 == .failed }.count }
+    var hasUnknownStates: Bool { ([gateway] + servers + tunnels).contains(.unknown) }
+    var activityText: String {
+        if hasUnknownStates { return "状态待确认 · 已确认运行 MCP \(runningServers)，隧道 \(runningTunnels)" }
+        return "MCP \(runningServers)/\(servers.count) · 隧道 \(runningTunnels)/\(tunnels.count) 运行"
     }
 }
 

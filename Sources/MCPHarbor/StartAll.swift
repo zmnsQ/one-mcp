@@ -5,6 +5,24 @@ struct StartAllStep: Identifiable {
     let title: String
     var detail = "等待启动"
     var status = "waiting"
+    var statusTitle: String {
+        switch status {
+        case "succeeded": return "已完成"
+        case "failed": return "失败"
+        case "starting": return "启动中"
+        case "skipped": return "已跳过"
+        default: return "等待中"
+        }
+    }
+    var presentationStatus: MenuBarStatus {
+        switch status {
+        case "succeeded": return .ready
+        case "failed": return .failed
+        case "starting": return .starting
+        case "skipped": return .stopped
+        default: return .checking
+        }
+    }
 }
 
 @MainActor extension HarborStore {
