@@ -167,8 +167,8 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
     func clearRuntimeState() {
         healthTasks.values.forEach { $0.cancel() }; healthTasks = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil; recordCloudflarePublicURLs = [:]; requestTraces = []; connectionEvents = []
         clearPendingCommands(); gateway = nil; tunnels = [:]; gatewayState = "Stopped"
-        runtimeValues = [:]; tunnelKey = ""; recordTunnelKeys = [:]; redactionValues = []; tools = [:]; states = [:]; tunnelStates = [:]; tunnelMenuStates = [:]
-        logs = []; notice = nil; toolChanges = [:]; selectedID = nil; doctorPassed = [:]; tunnelReady = [:]; initializedTargets = [:]; checkedTargets = [:]
+        runtimeValues = [:]; tunnelKey = ""; recordTunnelKeys = [:]; recordTunnelKeyAccountIDs = [:]; redactionValues = []; tools = [:]; states = [:]; tunnelStates = [:]; tunnelMenuStates = [:]
+        logs = []; notice = nil; toolChanges = [:]; selectedID = nil; doctorPassed = [:]; tunnelReady = [:]; initializedTargets = [:]; checkedTargets = [:]; profileCreation = [:]; profileCreationOperationIDs = [:]
     }
     private var vaultAccounts: [String] {
         preferences.servers.flatMap { server in server.environmentKeys.map { credentialKey(serverID: server.id, variable: $0) } } + ["__tunnel_key"] + preferences.effectiveTunnelRecords.map { "__tunnel_record:" + $0.id }
@@ -178,8 +178,21 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
             try validatePreferences(preferences, requireInstalled: false)
             var count = 0
             for key in vaultAccounts {
-                let value = key == "__tunnel_key" ? tunnelKey : key.hasPrefix("__tunnel_record:") ? (recordTunnelKeys[String(key.dropFirst("__tunnel_record:".count))] ?? "") : (runtimeValues[key] ?? "")
-                if !value.isEmpty { try SecretVault.write(value, account: currentWorkspaceID + ":" + key); count += 1 }
+                if key.hasPrefix("__tunnel_record:") {
+                    let id = String(key.dropFirst("__tunnel_record:".count))
+                    guard preferences.effectiveTunnelRecords.first(where: { $0.id == id })?.credentialSourceRecordID == nil,
+                          !(recordTunnelKeys[id] ?? "").isEmpty else { continue }
+                    guard saveRecordTunnelKey(id, remember: false) else {
+                        throw NSError(domain: "MCPHarbor", code: 12, userInfo: [NSLocalizedDescriptionKey: tunnelCredentialStatus])
+                    }
+                    count += 1; continue
+                }
+                let value = key == "__tunnel_key" ? tunnelKey : (runtimeValues[key] ?? "")
+                if !value.isEmpty {
+                    try SecretVault.write(value, account: currentWorkspaceID + ":" + key)
+                    if key == "__tunnel_key" { invalidateLegacyRecordCredentialAssociations() }
+                    count += 1
+                }
             }
             notice = "已明确保存 \(count) 项凭据到此工作空间的 macOS Keychain。"
         } catch { errorMessage = error.localizedDescription }
@@ -188,9 +201,12 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         do {
             var count = 0
             for key in vaultAccounts {
+                if key.hasPrefix("__tunnel_record:") {
+                    if loadRecordTunnelKey(String(key.dropFirst("__tunnel_record:".count))) { count += 1 }
+                    continue
+                }
                 if let value = try SecretVault.read(account: currentWorkspaceID + ":" + key) {
                     if key == "__tunnel_key" { tunnelKey = value }
-                    else if key.hasPrefix("__tunnel_record:") { recordTunnelKeys[String(key.dropFirst("__tunnel_record:".count))] = value }
                     else { runtimeValues[key] = value }; count += 1
                 }
             }
@@ -219,6 +235,15 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
                   ["openai", "cloudflare"].contains(record.transport), record.serverIDs.count <= 16,
                   Set(record.serverIDs).count == record.serverIDs.count,
                   record.serverIDs.allSatisfy({ id in value.servers.contains { $0.id == id } }) else { throw invalid("隧道名称、ID、连接方式或服务绑定无效。") }
+            if let account = record.accountID {
+                guard TunnelCredentialReferencePolicy.normalizedAccountID(account) != nil,
+                      account.utf16.count <= 100 else { throw invalid("账号标识须为 1–100 个字符，不得为空白或包含空字符。") }
+            }
+            if let source = record.credentialSourceRecordID {
+                guard source.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil else {
+                    throw invalid("密钥来源记录 ID 无效。")
+                }
+            }
             if let issue = RemoteConnectionValidation.issue(RemoteConnectionSettings(cloudflare: record.cloudflare)) { throw invalid(issue) }
         }
         guard (1024...65535).contains(value.port), value.servers.count <= 16 else { throw invalid("端口应为1024–65535，服务器最多16个。") }

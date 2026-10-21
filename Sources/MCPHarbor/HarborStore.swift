@@ -11,6 +11,8 @@ import AppKit
     @Published var notice: String?
     @Published var toolChanges: [String: String] = [:]
     @Published var tunnelReady: [String: Bool] = [:]
+    @Published var profileCreation: [String: TunnelProfileCreation] = [:]
+    var profileCreationOperationIDs: [String: String] = [:]
     @Published var initializedTargets: [String: String] = [:]
     @Published var checkedTargets: [String: String] = [:]
     @Published var doctorPassed: [String: Bool] = [:]
@@ -61,6 +63,7 @@ import AppKit
     @Published var runtimeValues: [String: String] = [:]
     @Published var tunnelKey = ""
     @Published var recordTunnelKeys: [String: String] = [:]
+    var recordTunnelKeyAccountIDs: [String: String] = [:]
     var gateway: ManagedProcess?
     var runtimeBridge: ManagedProcess?
     var startupPreparation: ManagedProcess?
@@ -270,6 +273,10 @@ import AppKit
                 if event["ok"] as? Bool == false, let context, let key = context.serverID,
                    ["tunnelAction", "cloudflareAction", "startTunnel", "startCloudflare", "stopTunnel", "stopCloudflare"].contains(context.method) {
                     tunnelMenuStates[key] = .failed
+                    if profileCreation[key]?.isInFlight == true {
+                        profileCreation[key] = .failed
+                        tunnelStates[key] = redacted(event["error"] as? String ?? "本地 Profile 创建失败，请检查配置后重试。")
+                    }
                 }
                 if event["ok"] as? Bool == true, let context, let key = context.serverID,
                    ["stopTunnel", "stopCloudflare"].contains(context.method) {
@@ -292,6 +299,10 @@ import AppKit
             if let key = event["key"] as? String, let path = event["profileLocation"] as? String { tunnelProfileLocations[key] = path }
         case "tunnelStatus":
             refreshStartAllTunnel(event)
+            if let key = event["key"] as? String, let operationID = profileCreationOperationIDs[key],
+               let phase = TunnelProfileCreation.correlatedEvent(event, operationID: operationID) {
+                profileCreation[key] = phase
+            }
             if let key = event["key"] as? String { tunnelMenuStates[key] = .tunnel(event: event) }
             if let key = event["key"] as? String {
                 if event["running"] as? Bool == true { runningTunnelKeys.insert(key) } else { runningTunnelKeys.remove(key) }
@@ -352,6 +363,7 @@ import AppKit
         if let error = event["error"] as? String { log(id, error); errorMessage = redacted(error) }
     }
     func clearPendingCommands() {
+        for (key, phase) in profileCreation where phase.isInFlight { profileCreation[key] = .unknown }
         commandTimeouts.values.forEach { $0.cancel() }
         commandTimeouts = [:]; commandContexts = [:]; pendingCommands = [:]
     }
@@ -437,19 +449,38 @@ import AppKit
         }
         return true
     }
+    func requireProfileCreationRuntime() -> Bool {
+        guard appliedGatewayFingerprints["tunnelProfileCreationVersion"] == ConfigurationFingerprint.scalar("1") else {
+            errorMessage = "当前网关不支持安全创建与结果确认。请明确停止并使用新版网关重启，再创建 Profile；不会调用旧版初始化。"
+            return false
+        }
+        return true
+    }
     @discardableResult func tunnelAction(_ action: String, record: TunnelRecord, persistConfiguration: Bool = true) -> Bool {
-        guard requireScopedTunnelRuntime() else { return false }
+        guard requireScopedTunnelRuntime(), action != "init" || requireProfileCreationRuntime() else { return false }
         let key = record.id
-        guard gatewayReady, !tunnelRunning(key), !hasPendingCommand(for: key), ["init", "doctor", "run"].contains(action), validRecordBinding(record) else { errorMessage = errorMessage ?? "请启动网关并等待当前隧道操作完成。"; return false }
+        guard gatewayReady, !tunnelRunning(key), !hasPendingCommand(for: key), profileCreation[key]?.isInFlight != true, ["init", "doctor", "run"].contains(action), validRecordBinding(record) else { errorMessage = errorMessage ?? "请启动网关并等待当前隧道操作完成。"; return false }
         guard !persistConfiguration || save() else { return false }
-        let runtimeKey = recordTunnelKeys[key] ?? ""
+        let runtimeKey: String
+        do { runtimeKey = try resolveRecordTunnelKey(record) }
+        catch { errorMessage = error.localizedDescription; return false }
+        guard action != "init" || !runtimeKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            errorMessage = "创建新 Profile 需要 Runtime API Key。请选择同账号已存凭据，或在账号区域输入本次密钥。"; return false
+        }
         redactionValues.insert(runtimeKey)
         var parameters: [String: Any] = ["key": key, "serverIDs": record.serverIDs, "action": action, "executable": preferences.tunnelClientPath,
             "profile": record.profile, "tunnelID": record.tunnelID, "runtimeKey": runtimeKey]
         if let file = record.profileFile, !file.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { parameters["profileFile"] = file }
+        if action == "init" {
+            let operationID = UUID().uuidString
+            profileCreationOperationIDs[key] = operationID
+            parameters["operationID"] = operationID
+            profileCreation[key] = .submitted
+        }
         if command("tunnelAction", params: parameters) {
             tunnelStates[key] = "请求已提交，等待进程确认"; doctorPassed[key] = false; return true
         }
+        if action == "init" { profileCreation[key] = .failed }
         return false
     }
     // Compatibility for callers of older configuration APIs; dispatch remains explicitly scoped.

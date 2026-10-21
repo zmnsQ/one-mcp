@@ -84,6 +84,7 @@ const oauthFields = remoteAuth.snapshot();
 const savedOAuthFields = savedOAuth ?? oauthFields;
 Object.assign(configurationFingerprints, {
   tunnelRecordsVersion: configurationFingerprint(['1']),
+  tunnelProfileCreationVersion: configurationFingerprint(['1']),
   oauthEnabled: configurationFingerprint([String(savedOAuthFields.enabled)]),
   oauthPublicURL: configurationFingerprint([savedOAuthFields.publicURL]),
   oauthIssuer: configurationFingerprint([savedOAuthFields.issuer]),

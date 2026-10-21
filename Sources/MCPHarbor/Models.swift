@@ -74,6 +74,10 @@ struct TunnelRecord: Codable, Identifiable, Equatable {
     var profileFile: String?
     var cloudflare: CloudflareSettings?
     var startWithAll: Bool?
+    // User-declared local account label, not a verified remote account identity.
+    // These fields are references only; credentials remain in the local Keychain.
+    var accountID: String?
+    var credentialSourceRecordID: String?
     var participatesInStartAll: Bool { startWithAll != false }
 }
 struct ToolInfo: Identifiable {

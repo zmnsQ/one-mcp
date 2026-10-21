@@ -103,3 +103,11 @@ The app includes staged OpenAI Tunnel onboarding, external OAuth resource-server
 ## Independent tunnel records
 
 Add named tunnel records and bind one or more MCP services to each. OpenAI and Cloudflare records have independent lifecycle and scoped routes; new MCP services are never implicitly added. See [configuration, migration and verification](docs/TUNNEL_RECORDS.md).
+
+### Local Profile creation and credential reuse
+
+New OpenAI records now offer a single **Create and save local Profile** action,
+with account-scoped Keychain references instead of repeated key entry. This
+initializes an existing Tunnel ID locally, never creates a remote Tunnel or starts
+it automatically. Existing records remain save-only by default. See the
+[flow, recovery rules and verification limits](docs/TUNNEL_CREATION-2026-10-21.md).

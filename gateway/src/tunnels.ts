@@ -16,6 +16,7 @@ type Target = {
     runtimeKey: string;
     profileFile?: string;
     serverIDs?: string[];
+    operationID?: string;
 };
 type Running = {
     target: Omit<Target, 'runtimeKey'>;
@@ -26,6 +27,11 @@ type Running = {
     folder?: string;
     checking: boolean;
     configurationFingerprints: ConfigurationFingerprints;
+};
+type Pending = {
+    target: Omit<Target, 'runtimeKey'>;
+    cancelled: boolean;
+    completed: Promise<void>;
 };
 export function profileLocationEnvironment(source:NodeJS.ProcessEnv):Record<string,string> {
     const result:Record<string,string>={};
@@ -43,6 +49,7 @@ export function profileSelection(profile:string,file:string|undefined,source:Nod
 }
 export class TunnelManager {
     private running = new Map<string, Running>();
+    private pending = new Map<string, Pending>();
     private results = new Map<string, object>();
     constructor(private port: number, private emit: (event: object) => void, private serverReady: (id: string) => boolean) { }
     snapshot(): object[] { return [...this.results.values()]; }
@@ -51,6 +58,11 @@ export class TunnelManager {
         this.results.set(key, event);
         this.emit(event);
     }
+    private assertAvailable(target: Omit<Target, 'runtimeKey'>, own?: Pending) {
+        if (this.running.has(target.key) || (this.pending.has(target.key) && this.pending.get(target.key) !== own)) throw new TunnelActionError('TUNNEL_BUSY');
+        const targets = [...this.running.values(), ...[...this.pending.values()].filter(p => p !== own)];
+        if (targets.some(({ target: other }) => other.tunnelID === target.tunnelID || (target.profileFile ? other.profileFile === target.profileFile : !other.profileFile && other.profile === target.profile))) throw new TunnelActionError('TUNNEL_DUPLICATE');
+    }
     async action(raw: unknown): Promise<unknown> {
         const input = raw as Target;
         const t = input && typeof input === 'object' ? {...input, profileFile: typeof input.profileFile === 'string' && !input.profileFile.trim() ? undefined : input.profileFile} : input;
@@ -58,66 +70,106 @@ export class TunnelManager {
         if (typeof t.profile !== 'string' || t.profile.length > 256 || (!t.profileFile && !/^[\w-]{1,64}$/.test(t.profile))) throw new TunnelActionError('TUNNEL_PROFILE');
         if (typeof t.tunnelID !== 'string' || !/^tunnel_[\w-]+$/.test(t.tunnelID)) throw new TunnelActionError('TUNNEL_ID');
         if (typeof t.executable !== 'string' || !isAbsolute(t.executable) || t.executable.includes('\0')) throw new TunnelActionError('TUNNEL_EXECUTABLE');
-        try { await fs.access(t.executable, constants.X_OK); } catch { throw new TunnelActionError('TUNNEL_EXECUTABLE'); }
         if (t.runtimeKey !== undefined && (typeof t.runtimeKey !== 'string' || t.runtimeKey.length > 65536 || t.runtimeKey.includes('\0'))) throw new TunnelActionError('TUNNEL_KEY_FORMAT');
         if (t.profileFile !== undefined && (typeof t.profileFile !== 'string' || !isAbsolute(t.profileFile) || t.profileFile.includes('\0'))) throw new TunnelActionError('TUNNEL_PROFILE_FILE');
-        this.emit({type:'tunnelProfile',key:t.key,...profileSelection(t.profile,t.profileFile,process.env)});
-        if (t.profileFile && t.action === 'init') throw new TunnelActionError('TUNNEL_EXISTING_INIT');
-        if (t.profileFile) { try { if (!(await fs.stat(t.profileFile)).isFile()) throw new Error(); await fs.access(t.profileFile, constants.R_OK); } catch { throw new TunnelActionError('TUNNEL_PROFILE_FILE'); } }
+        if (t.operationID !== undefined && (typeof t.operationID !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(t.operationID))) throw new TunnelActionError('TUNNEL_TARGET');
         const binding = t.serverIDs === undefined ? undefined : validateTunnelBinding(t.key, t.serverIDs, 'openai');
         if (binding && t.action !== 'init' && binding.serverIDs.some(id => !this.serverReady(id))) throw new TunnelActionError('TUNNEL_BACKEND');
         if (!binding && t.key !== 'aggregate' && t.action !== 'init' && !this.serverReady(t.key)) throw new TunnelActionError('TUNNEL_BACKEND');
-        if (this.running.has(t.key)) throw new TunnelActionError('TUNNEL_BUSY');
-        const profileIdentity = t.profileFile ? await fs.realpath(t.profileFile) : undefined;
-        if ([...this.running.values()].some(r => r.target.tunnelID === t.tunnelID || (profileIdentity ? r.target.profileFile === profileIdentity : !r.target.profileFile && r.target.profile === t.profile))) throw new TunnelActionError('TUNNEL_DUPLICATE');
-        const endpoint = binding ? scopedTunnelEndpoint(this.port, t.key) : `http://127.0.0.1:${this.port}${t.key === 'aggregate' ? '/mcp' : `/servers/${t.key}/mcp`}`;
-        const signature = [t.executable, t.profile, t.tunnelID, endpoint, t.profileFile ?? '', ...(binding ? [binding.serverIDs.join(',')] : [])].join('\n');
-        const configurationFingerprints = tunnelConfigurationFingerprints(t, endpoint);
-        const args = t.profileFile ? [t.action, '--profile-file', t.profileFile] : [t.action, '--profile', t.profile];
+        // Reserve before the first filesystem await, not merely after spawn.
+        // Two requests must not both pass preflight while init/run is preparing.
+        const target = { key: t.key, action: t.action, executable: t.executable, profile: t.profile, tunnelID: t.tunnelID, profileFile: t.profileFile, operationID: t.operationID, ...(binding ? {serverIDs: [...binding.serverIDs]} : {}) };
+        this.assertAvailable(target);
+        let completePending!: () => void;
+        const pending: Pending = { target, cancelled: false, completed: new Promise(resolve => { completePending = resolve; }) };
+        this.pending.set(t.key, pending);
         let folder: string | undefined;
-        if (t.action === 'init')
-            args.push('--sample', 'sample_mcp_remote_no_auth', '--tunnel-id', t.tunnelID, '--mcp-server-url', endpoint);
-        if (t.action === 'doctor')
-            args.push('--explain');
-        if (t.action === 'run') {
-            folder = await fs.mkdtemp(join(tmpdir(), 'onemcp-health-'));
-            await fs.chmod(folder, 0o700);
-            args.push('--health.listen-addr', '127.0.0.1:0', '--health.url-file', join(folder, 'url'));
-        }
-        const child = spawn(t.executable, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false,
-            env: { PATH: process.env.PATH, HOME: process.env.HOME, ...profileLocationEnvironment(process.env), ...(t.runtimeKey ? {CONTROL_PLANE_API_KEY: t.runtimeKey} : {}), CONTROL_PLANE_TUNNEL_ID: t.tunnelID, MCP_SERVER_URL: endpoint } });
-        let resolveClosed!: () => void;
-        const r: Running = { target: { key: t.key, action: t.action, executable: t.executable, profile: t.profile, tunnelID: t.tunnelID, profileFile: profileIdentity, ...(binding ? {serverIDs: [...binding.serverIDs]} : {}) }, child,
-            configurationFingerprints, ready: false, checking: false, folder, closed: new Promise(resolve => { resolveClosed = resolve; }) };
-        this.running.set(t.key, r);
-        // No raw tunnel stdout/stderr enters logs, as credentials may appear in diagnostics.
-        let diagnostic: TunnelErrorCode | undefined;
-        let diagnosticTail = '';
-        const inspect = (chunk: Buffer) => { diagnosticTail = (diagnosticTail + chunk.toString('utf8')).slice(-4096); diagnostic = classifyTunnelDiagnostic(diagnosticTail) ?? diagnostic; };
-        child.stdout?.on('data', inspect); child.stderr?.on('data', inspect);
-        child.once('close', code => {
-            clearInterval(r.timer);
-            if (this.running.get(t.key) === r)
-                this.running.delete(t.key);
-            const failure = code === 0 ? undefined : (diagnostic ?? 'TUNNEL_FAILED');
-            diagnosticTail = '';
-            this.event(t.key, { ...(failure ? {errorOrigin:'official-client', errorCode: failure, message: tunnelErrors[failure]} : {}), running: false, ready: false, action: t.action, exitCode: code, signature, configurationFingerprintVersion, configurationFingerprints,
-                state: t.action === 'run' ? `Stopped (${code ?? 'signal'})` : `${t.action} ${code === 0 ? 'passed' : 'failed'}` });
-            if (folder)
-                void fs.rm(folder, { recursive: true, force: true });
-            resolveClosed();
-        });
+        let launched = false;
         try {
-            await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', () => reject(new TunnelActionError('TUNNEL_EXECUTABLE'))); });
+            try { await fs.access(t.executable, constants.X_OK); } catch { throw new TunnelActionError('TUNNEL_EXECUTABLE'); }
+            const selection = profileSelection(t.profile, t.profileFile, process.env);
+            this.emit({type:'tunnelProfile',key:t.key,...selection});
+            if (t.profileFile && t.action === 'init') throw new TunnelActionError('TUNNEL_EXISTING_INIT');
+            if (t.profileFile) {
+                try {
+                    if (!(await fs.stat(t.profileFile)).isFile()) throw new Error();
+                    await fs.access(t.profileFile, constants.R_OK);
+                    target.profileFile = await fs.realpath(t.profileFile);
+                } catch { throw new TunnelActionError('TUNNEL_PROFILE_FILE'); }
+                // Aliases may only become apparent after realpath. The reservation
+                // remains held while resolving them and preparing the health folder.
+                this.assertAvailable(target, pending);
+            }
+            if (t.action === 'init') {
+                if (!selection.profileLocation) throw new TunnelActionError('TUNNEL_PROFILE_CHECK');
+                let exists = true;
+                try {
+                    // Presence is enough to refuse overwrite, not to infer validity
+                    // or success. lstat also protects broken links and non-file paths.
+                    await fs.lstat(selection.profileLocation);
+                } catch (error) {
+                    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw new TunnelActionError('TUNNEL_PROFILE_CHECK');
+                    exists = false;
+                }
+                // A previous init may have succeeded despite a lost response or
+                // nonzero exit; every retry consults disk rather than cached UI state.
+                if (exists) throw new TunnelActionError('TUNNEL_EXISTING_INIT');
+            }
+            const endpoint = binding ? scopedTunnelEndpoint(this.port, t.key) : `http://127.0.0.1:${this.port}${t.key === 'aggregate' ? '/mcp' : `/servers/${t.key}/mcp`}`;
+            const signature = [t.executable, t.profile, t.tunnelID, endpoint, t.profileFile ?? '', ...(binding ? [binding.serverIDs.join(',')] : [])].join('\n');
+            const configurationFingerprints = tunnelConfigurationFingerprints(t, endpoint);
+            const operation = t.action === 'init' && t.operationID ? {operationID: t.operationID} : {};
+            const args = t.profileFile ? [t.action, '--profile-file', t.profileFile] : [t.action, '--profile', t.profile];
+            if (t.action === 'init')
+                args.push('--sample', 'sample_mcp_remote_no_auth', '--tunnel-id', t.tunnelID, '--mcp-server-url', endpoint);
+            if (t.action === 'doctor')
+                args.push('--explain');
+            if (t.action === 'run') {
+                folder = await fs.mkdtemp(join(tmpdir(), 'onemcp-health-'));
+                await fs.chmod(folder, 0o700);
+                args.push('--health.listen-addr', '127.0.0.1:0', '--health.url-file', join(folder, 'url'));
+            }
+            if (pending.cancelled) throw new TunnelActionError('TUNNEL_FAILED');
+            const child = spawn(t.executable, args, { stdio: ['ignore', 'pipe', 'pipe'], shell: false,
+                env: { PATH: process.env.PATH, HOME: process.env.HOME, ...profileLocationEnvironment(process.env), ...(t.runtimeKey ? {CONTROL_PLANE_API_KEY: t.runtimeKey} : {}), CONTROL_PLANE_TUNNEL_ID: t.tunnelID, MCP_SERVER_URL: endpoint } });
+            let resolveClosed!: () => void;
+            const r: Running = { target, child,
+                configurationFingerprints, ready: false, checking: false, folder, closed: new Promise(resolve => { resolveClosed = resolve; }) };
+            this.running.set(t.key, r);
+            launched = true;
+            // No raw tunnel stdout/stderr enters logs, as credentials may appear in diagnostics.
+            let diagnostic: TunnelErrorCode | undefined;
+            let diagnosticTail = '';
+            const inspect = (chunk: Buffer) => { diagnosticTail = (diagnosticTail + chunk.toString('utf8')).slice(-4096); diagnostic = classifyTunnelDiagnostic(diagnosticTail) ?? diagnostic; };
+            child.stdout?.on('data', inspect); child.stderr?.on('data', inspect);
+            child.once('close', code => {
+                clearInterval(r.timer);
+                if (this.running.get(t.key) === r)
+                    this.running.delete(t.key);
+                const failure = code === 0 ? undefined : (diagnostic ?? 'TUNNEL_FAILED');
+                diagnosticTail = '';
+                this.event(t.key, { ...operation, ...(failure ? {errorOrigin:'official-client', errorCode: failure, message: tunnelErrors[failure]} : {}), running: false, ready: false, action: t.action, exitCode: code, signature, configurationFingerprintVersion, configurationFingerprints,
+                    state: t.action === 'run' ? `Stopped (${code ?? 'signal'})` : `${t.action} ${code === 0 ? 'passed' : 'failed'}` });
+                if (folder)
+                    void fs.rm(folder, { recursive: true, force: true });
+                resolveClosed();
+            });
+            try {
+                await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', () => reject(new TunnelActionError('TUNNEL_EXECUTABLE'))); });
+            }
+            catch (e) {
+                await r.closed;
+                throw e;
+            }
+            this.event(t.key, { ...operation, running: true, ready: false, action: t.action, signature, configurationFingerprintVersion, configurationFingerprints, state: 'Process started; readiness unverified' });
+            if (folder)
+                r.timer = setInterval(() => { void this.check(r, signature); }, 1000);
+            return { key: t.key, action: t.action, submitted: true, ready: false };
+        } finally {
+            if (!launched && folder) await fs.rm(folder, { recursive: true, force: true }).catch(() => {});
+            if (this.pending.get(t.key) === pending) this.pending.delete(t.key);
+            completePending();
         }
-        catch (e) {
-            await r.closed;
-            throw e;
-        }
-        this.event(t.key, { running: true, ready: false, action: t.action, signature, configurationFingerprintVersion, configurationFingerprints, state: 'Process started; readiness unverified' });
-        if (folder)
-            r.timer = setInterval(() => { void this.check(r, signature); }, 1000);
-        return { key: t.key, action: t.action, submitted: true, ready: false };
     }
     private async check(r: Running, signature: string) {
         if (r.checking || !r.folder)
@@ -152,8 +204,10 @@ export class TunnelManager {
         }
     }
     async stop(key: string) {
+        const pending = this.pending.get(key);
+        if (pending) { pending.cancelled = true; await pending.completed; }
         const r = this.running.get(key);
-        if (!r)
+        if (!r || (pending && r.target !== pending.target))
             return;
         clearInterval(r.timer);
         r.child.kill('SIGTERM');
@@ -166,7 +220,8 @@ export class TunnelManager {
         }
     }
     async stopForServer(id: string) {
-        await Promise.all([...this.running].filter(([key, r]) => r.target.serverIDs ? r.target.serverIDs.includes(id) : key === 'aggregate' || key === id).map(([key]) => this.stop(key)));
+        const active = new Map<string, Pick<Running, 'target'>>([...this.running, ...this.pending]);
+        await Promise.all([...active].filter(([key, r]) => r.target.serverIDs ? r.target.serverIDs.includes(id) : key === 'aggregate' || key === id).map(([key]) => this.stop(key)));
     }
-    async stopAll() { await Promise.all([...this.running.keys()].map(key => this.stop(key))); }
+    async stopAll() { await Promise.all([...new Set([...this.running.keys(), ...this.pending.keys()])].map(key => this.stop(key))); }
 }

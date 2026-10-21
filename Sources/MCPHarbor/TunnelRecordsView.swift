@@ -28,7 +28,7 @@ struct TunnelRecordsView: View {
 
     private func edit(_ record: TunnelRecord, isNew: Bool = false) {
         editing = TunnelEditSession(record: record, isNew: isNew, preferences: store.preferences,
-                                    workspace: store.currentWorkspaceID, revision: store.savedRevision, runtimeKey: store.recordTunnelKeys[record.id] ?? "")
+                                    workspace: store.currentWorkspaceID, revision: store.savedRevision, runtimeKey: store.recordTunnelKeyForEditing(record.id))
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -224,32 +224,77 @@ private struct TunnelRecordEditor: View {
     @State private var saveError: String?
     @State private var runtimeKey: String
     @State private var committedRuntimeKey: String
+    @State private var savedDraft: TunnelRecord?
+    @State private var acceptedPreferences: Preferences?
+    @State private var acceptedRevision: String?
+    @State private var createProfile: Bool
+    @State private var submitted = false
     init(session: TunnelEditSession) {
         self.session = session
         _record = State(initialValue: session.record)
         _runtimeKey = State(initialValue: session.runtimeKey)
         _committedRuntimeKey = State(initialValue: session.runtimeKey)
+        _createProfile = State(initialValue: session.isNew)
     }
     private var recordID: String { record.id }
-    private var unsaved: Bool { session.isNew || record != session.record || runtimeKey != committedRuntimeKey }
+    private var unsaved: Bool { (session.isNew && savedDraft == nil) || record != (savedDraft ?? session.record) || runtimeKey != committedRuntimeKey }
+    private var phase: TunnelProfileCreation? { submitted ? store.profileCreation[recordID] : nil }
+    private var completed: Bool { phase == .succeeded }
+    private var wantsCreation: Bool { record.transport == "openai" && createProfile }
+    private var primaryTitle: String { completed ? "完成" : wantsCreation ? "创建并保存本地 Profile" : "保存配置" }
+
     @State private var confirmation = ""
     @State private var pendingAction: (() -> Void)?
     @State private var showConfirmation = false
-    private var busy: Bool { store.startAllBusy || store.tunnelRunning(recordID) || store.hasPendingCommand(for: recordID) }
+    private var busy: Bool { store.startAllBusy || store.tunnelRunning(recordID) || store.hasPendingCommand(for: recordID) || store.profileCreation[recordID]?.isInFlight == true }
     private var contextChanged: Bool {
-        session.workspace != store.currentWorkspaceID || session.preferences != store.preferences || session.revision != store.savedRevision
+        session.workspace != store.currentWorkspaceID || (acceptedPreferences ?? session.preferences) != store.preferences || (acceptedRevision ?? session.revision) != store.savedRevision
     }
     private func binding<Value>(_ key: WritableKeyPath<TunnelRecord, Value>) -> Binding<Value> {
         Binding(get: { record[keyPath: key] }, set: { record[keyPath: key] = $0 })
     }
-    private func save() {
+    private func save(initialize: Bool = true, closeAfterSave: Bool = true) {
+        if completed { dismiss(); return }
         guard !busy, !contextChanged else { saveError = "配置或运行状态已改变，请取消并重新打开编辑。"; return }
+        if wantsCreation && initialize {
+            guard store.gatewayReady, store.requireScopedTunnelRuntime(), store.requireProfileCreationRuntime() else {
+                saveError = store.errorMessage ?? "请先启动新版本机网关，再创建本地 Profile；不会自动启动或公开服务。"; return
+            }
+            guard record.tunnelID.range(of: "^tunnel_[A-Za-z0-9_-]+$", options: .regularExpression) != nil,
+                  record.profile.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil,
+                  (record.profileFile ?? "").isEmpty else {
+                saveError = "请填写已有的 OpenAI Tunnel ID 和唯一 Profile 名称；已有 Profile 文件请选择“使用已有 Profile”。"; return
+            }
+        }
         do {
-            let updated = try TunnelRecordPresentation.applying(record, isNew: session.isNew, to: store.preferences)
+            if let account = record.accountID {
+                let trimmed = account.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty { record.accountID = nil }
+                else if let normalized = TunnelCredentialReferencePolicy.normalizedAccountID(trimmed) { record.accountID = normalized }
+                else { saveError = "账号标识须为 1–100 个字符，不得包含空字符。"; return }
+            }
+            let updated = try TunnelRecordPresentation.applying(record, isNew: session.isNew && savedDraft == nil, to: store.preferences)
             let previous = store.preferences
             store.preferences = updated
-            if store.save() { store.recordTunnelKeys[recordID] = runtimeKey; dismiss() }
-            else { store.preferences = previous; saveError = store.errorMessage ?? "保存失败，草稿已保留。" }
+            guard store.save() else {
+                store.preferences = previous; saveError = store.errorMessage ?? "保存失败，草稿已保留，未创建 Profile。"; return
+            }
+            // Persist the stable record identity before invoking any external process.
+            // Retry edits the same record; a failed save never triggers initialization.
+            savedDraft = record; acceptedPreferences = store.preferences; acceptedRevision = store.savedRevision
+            let previousAccount = previous.effectiveTunnelRecords.first { $0.id == recordID }?.accountID
+            if TunnelCredentialReferencePolicy.normalizedAccountID(previousAccount) != TunnelCredentialReferencePolicy.normalizedAccountID(record.accountID) {
+                store.clearRecordTunnelKeyForAccountChange(recordID)
+            }
+            store.setRecordTunnelKey(record.credentialSourceRecordID == nil ? runtimeKey : "", for: recordID)
+            committedRuntimeKey = runtimeKey
+            saveError = nil
+            guard wantsCreation && initialize else { if closeAfterSave { dismiss() }; return }
+            submitted = true
+            if !store.tunnelAction("init", record: record, persistConfiguration: false) {
+                store.profileCreation[recordID] = .failed
+                saveError = store.errorMessage ?? "配置已保存，但 Profile 创建未提交。"
+            }
         } catch { saveError = error.localizedDescription }
     }
     private func cloudflare<Value>(_ key: WritableKeyPath<CloudflareSettings, Value>) -> Binding<Value> {
@@ -274,40 +319,51 @@ private struct TunnelRecordEditor: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(session.isNew ? "添加隧道" : "编辑隧道").font(.title2.bold())
-                    Text("选择 MCP 服务，再设置连接方式。").font(.caption).foregroundStyle(.secondary)
+                    Text("账号与凭据 → 隧道配置 → 创建并保存。启动仍需单独确认。").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
             }.padding(20)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    configuration.disabled(busy || contextChanged)
+                    configuration.disabled(busy || contextChanged || completed)
                     if busy { Label("隧道运行或操作中，停止后可修改配置。", systemImage: "info.circle").font(.caption) }
                     if contextChanged { Text("配置已在其他位置改变，请取消后重新打开。").foregroundStyle(.orange) }
-                    if !session.isNew {
-                        DisclosureGroup("认证与维护") {
+                    if let phase {
+                        Label(phase.message, systemImage: completed ? "checkmark.circle.fill" : "info.circle")
+                            .font(.callout).foregroundStyle(completed ? Color.green : Color.secondary)
+                        if phase == .failed || phase == .unknown {
+                            Text(store.tunnelStates[recordID] ?? "请核对 Profile 路径与网关状态。")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
+                    }
+                    if !session.isNew || savedDraft != nil {
+                        DisclosureGroup("连接检查与维护（可选）") {
                             VStack(alignment: .leading, spacing: 12) {
                                 if unsaved { Text("先保存配置，再进行认证和连接检查。").font(.caption) }
                                 if record.transport == "openai" { credentials }
                                 actions.disabled(unsaved)
                             }.padding(.top, 8).disabled(contextChanged)
                         }
-                    } else {
-                        Text("保存后可在编辑中配置密钥、创建 Profile 或检查连接；保存不会自动启动。").font(.caption).foregroundStyle(.secondary)
+                    }
+                    if wantsCreation {
+                        Text("将为已有 Tunnel ID 创建本地 Profile，不创建 Platform 远端隧道，也不启动隧道。已有文件不会覆盖。")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if !store.gatewayReady { Text("请先启动本机网关，再点击创建。草稿可留在此处；不会自动启动网关。 ").font(.caption).foregroundStyle(.orange) }
                     }
                     if let saveError { Text(saveError).foregroundStyle(.red).font(.callout) }
                 }.padding(20)
             }
             Divider()
             HStack {
-                Button("取消", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
+                Button(savedDraft == nil ? "取消" : busy ? "关闭（创建继续）" : "关闭（配置已保留）", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
-                Button(session.isNew ? "添加" : "保存") { save() }
+                Button(primaryTitle) { save() }
                     .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
-                    .disabled(busy || contextChanged || record.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || record.serverIDs.isEmpty)
+                    .disabled(!completed && (busy || contextChanged || record.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || record.serverIDs.isEmpty || (wantsCreation && !store.gatewayReady)))
             }.padding(20)
-        }.frame(width: 600, height: 640).textFieldStyle(.roundedBorder)
-        .interactiveDismissDisabled(unsaved)
+        }.frame(width: 660, height: 720).textFieldStyle(.roundedBorder)
+        .interactiveDismissDisabled(unsaved || busy)
         .alert("确认隧道操作", isPresented: $showConfirmation) {
             Button("取消", role: .cancel) { pendingAction = nil }
             Button("继续") { let action = pendingAction; pendingAction = nil; action?() }
@@ -315,9 +371,15 @@ private struct TunnelRecordEditor: View {
     }
     private var configuration: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Picker("连接方式", selection: binding(\.transport)) {
+                Text("OpenAI 私有隧道").tag("openai")
+                Text("Cloudflare 公网入口").tag("cloudflare")
+            }.pickerStyle(.segmented)
+            if record.transport == "openai" { accountConfiguration }
+            Divider()
+            Text("2 · 隧道基础配置").font(.headline)
             TextField("隧道名称", text: binding(\.name))
-
-            Text("绑定的 MCP 服务（至少选择一个）").font(.headline)
+            Text("绑定的 MCP 服务（至少选择一个）").font(.subheadline.bold())
             if store.preferences.servers.isEmpty { Text("请先在 MCP 服务页面添加一个服务。").font(.caption).foregroundStyle(.secondary) }
             ForEach(store.preferences.servers) { server in
                 Toggle(server.name, isOn: Binding(get: { record.serverIDs.contains(server.id) }, set: { selected in
@@ -332,34 +394,96 @@ private struct TunnelRecordEditor: View {
                     Button("移除绑定") { binding(\.serverIDs).wrappedValue = record.serverIDs.filter { $0 != id } }
                 }
             }
-            Picker("连接方式", selection: binding(\.transport)) {
-                Text("OpenAI").tag("openai")
-                Text("Cloudflare").tag("cloudflare")
-            }.pickerStyle(.segmented)
             if record.transport == "openai" { openAIConfiguration } else { cloudflareConfiguration }
             DisclosureGroup("高级设置") {
                 Toggle("参与全部启动", isOn: Binding(get: { record.participatesInStartAll }, set: { binding(\.startWithAll).wrappedValue = $0 })).padding(.top, 8)
             }
         }
     }
+    private var knownAccounts: [String] {
+        let accounts = store.preferences.effectiveTunnelRecords.compactMap(\.accountID) + [record.accountID].compactMap { $0 }
+        return Array(Set(accounts)).filter { !$0.isEmpty }.sorted()
+    }
+    private var accountConfiguration: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("1 · 账号与 Runtime 凭据").font(.headline)
+            Picker("已有账号", selection: Binding(get: { record.accountID ?? "" }, set: { selectAccount($0) })) {
+                Text("选择账号 / 手动填写").tag("")
+                ForEach(knownAccounts, id: \.self) { account in
+                    Text(account).tag(account)
+                }
+            }
+            TextField("账号标识，例如工作区名称（不是 API Key）", text: Binding(get: { record.accountID ?? "" }, set: { selectAccount($0) }))
+            Text("账号是本机分类标签，请核对实际 OpenAI 工作区。只复用此账号明确关联的钥匙串凭据。")
+                .font(.caption).foregroundStyle(.secondary)
+            Picker("Runtime API Key", selection: Binding(get: { record.credentialSourceRecordID ?? "" }, set: { value in
+                record.credentialSourceRecordID = value.isEmpty ? nil : value; runtimeKey = ""
+            })) {
+                Text("本次输入 / 此记录已有凭据").tag("")
+                ForEach(store.reusableCredentialRecords(for: record.accountID ?? "").filter { $0.id != recordID }) { source in
+                    Text("复用：" + source.name + "（钥匙串引用）").tag(source.id)
+                }
+            }
+            if record.credentialSourceRecordID == nil {
+                SecureField("Runtime API Key（已有 Profile 可留空）", text: $runtimeKey)
+                Text("仅用于本次会话；保存到钥匙串需另行明确确认。已有密钥不显示、不复制到新配置。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Label("使用已有安全引用，无需重复填写密钥", systemImage: "key.fill").font(.caption).foregroundStyle(.teal)
+            }
+            if !session.isNew, record.credentialSourceRecordID == nil, !(record.accountID ?? "").isEmpty {
+                Button("将已有钥匙串密钥关联到此账号") {
+                    let draft = record
+                    confirmation = "保存账号设置，并确认此隧道已存的钥匙串密钥属于账号“\(record.accountID ?? "")”？之后此账号的隧道可引用它。不会读取、复制密钥或创建 Profile。"
+                    pendingAction = {
+                        guard !busy, !contextChanged, record == draft else { saveError = "配置已改变，请重新核对账号。"; return }
+                        save(initialize: false, closeAfterSave: false)
+                        if saveError == nil, savedDraft == record {
+                            _ = store.associateRecordCredentialWithAccount(recordID)
+                            runtimeKey = ""; committedRuntimeKey = ""
+                        }
+                    }
+                    showConfirmation = true
+                }
+                Text(store.tunnelCredentialStatus).font(.caption).foregroundStyle(.secondary)
+            }
+            if store.reusableCredentialRecords(for: record.accountID ?? "").isEmpty {
+                Text("旧记录未标注账号时：先编辑原隧道，保存账号后，明确关联已有钥匙串密钥；之后同账号可直接复用。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+    private func selectAccount(_ account: String) {
+        guard account != (record.accountID ?? "") else { return }
+        record.accountID = account.isEmpty ? nil : account
+        record.credentialSourceRecordID = nil
+        runtimeKey = ""
+        // Auto-select only an unambiguous, explicitly account-bound safe reference.
+        let sources = store.reusableCredentialRecords(for: account).filter { $0.id != recordID }
+        if sources.count == 1 { record.credentialSourceRecordID = sources[0].id }
+    }
     private var openAIConfiguration: some View {
         VStack(alignment: .leading, spacing: 10) {
-            TextField("OpenAI Tunnel ID", text: binding(\.tunnelID))
-            DisclosureGroup("已有 Profile 或自定义名称") {
-            VStack(alignment: .leading, spacing: 8) {
+            TextField("已有 OpenAI Tunnel ID（tunnel_…）", text: binding(\.tunnelID))
+            Link("在 OpenAI Platform 管理 Tunnel", destination: TunnelHelp.tunnels)
+            Text("3 · 本地 Profile").font(.headline)
+            Picker("保存方式", selection: $createProfile) {
+                Text("创建本地 Profile").tag(true)
+                Text("使用已有 Profile / 仅保存更改").tag(false)
+            }.pickerStyle(.segmented)
             TextField("Profile 名称", text: binding(\.profile))
-            Text(TunnelSetupHints.tunnel(record.tunnelID)).font(.caption).foregroundStyle(.secondary)
-            HStack {
-                TextField("可选：已有 Profile 文件绝对路径", text: Binding(get: { record.profileFile ?? "" }, set: { binding(\.profileFile).wrappedValue = $0.isEmpty ? nil : $0 }))
-                Button("选择文件") {
-                    let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
-                    if panel.runModal() == .OK, let url = panel.url { binding(\.profileFile).wrappedValue = url.path }
+            if !createProfile {
+                HStack {
+                    TextField("可选：已有 Profile 文件绝对路径", text: Binding(get: { record.profileFile ?? "" }, set: { binding(\.profileFile).wrappedValue = $0.isEmpty ? nil : $0 }))
+                    Button("选择文件") {
+                        let panel = NSOpenPanel(); panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+                        if panel.runModal() == .OK, let url = panel.url { binding(\.profileFile).wrappedValue = url.path }
+                    }
                 }
             }
             if let location = store.tunnelProfileLocations[recordID] { Text(location).font(.caption).textSelection(.enabled) }
-            }.padding(.top, 8)
-            }
         }
+        .onChange(of: createProfile) { _, creating in if creating { record.profileFile = nil } }
     }
     private var cloudflareConfiguration: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -382,21 +506,20 @@ private struct TunnelRecordEditor: View {
     }
     private var credentials: some View {
         VStack(alignment: .leading, spacing: 8) {
-            SecureField("此隧道 Runtime API Key（已有 Profile 凭据可留空）", text: $runtimeKey)
+            Text("密钥输入与引用选择位于顶部账号区域；以下仅管理本机保存。 ").font(.caption)
             HStack {
                 Button("保存密钥并自动填入") { approve("将此隧道的 Runtime API Key 保存到本机钥匙串，并允许以后自动填入？不会写入配置或导出文件。") { store.saveRecordTunnelKey(recordID) } }
-                    .disabled(unsaved || (store.recordTunnelKeys[recordID] ?? "").isEmpty)
-                Button("从钥匙串载入") { store.loadRecordTunnelKey(recordID); runtimeKey = store.recordTunnelKeys[recordID] ?? ""; committedRuntimeKey = runtimeKey }.disabled(unsaved)
-                Button("忘记此隧道密钥") { approve("删除此隧道的新格式已存密钥？旧版工作空间密钥保留，服务端密钥不会撤销。") { store.forgetRecordTunnelKey(recordID); runtimeKey = store.recordTunnelKeys[recordID] ?? ""; committedRuntimeKey = runtimeKey } }.disabled(unsaved)
+                    .disabled(unsaved || (store.recordTunnelKeyForEditing(recordID)).isEmpty)
+                Button("从钥匙串载入") { store.loadRecordTunnelKey(recordID); runtimeKey = store.recordTunnelKeyForEditing(recordID); committedRuntimeKey = runtimeKey }.disabled(unsaved)
+                Button("忘记此隧道密钥") { approve("删除此隧道的新格式已存密钥？旧版工作空间密钥保留，服务端密钥不会撤销。") { store.forgetRecordTunnelKey(recordID); runtimeKey = store.recordTunnelKeyForEditing(recordID); committedRuntimeKey = runtimeKey } }.disabled(unsaved)
             }
             Text(store.tunnelCredentialStatus).font(.caption).foregroundStyle(.secondary)
-        }.disabled(busy)
+        }.disabled(busy || record.credentialSourceRecordID != nil)
     }
     private var actions: some View {
         HStack {
             if record.transport == "openai" {
-                Button("创建 Profile") { approve("为 \(record.name) 创建本机 OpenAI Profile？使用唯一名称；这不会启动隧道。") { store.tunnelAction("init", record: record) } }
-                    .disabled(busy || !store.gatewayReady || !(record.profileFile ?? "").isEmpty)
+                Text("创建操作已移至主按钮，无需展开维护。").font(.caption).foregroundStyle(.secondary)
             }
             Button("检查连接") { approve("检查 \(record.name) 的连接配置？OpenAI 检查可能连接 OpenAI；Cloudflare 检查不发布公网入口。") {
                 if record.transport == "openai" { store.tunnelAction("doctor", record: record) } else { store.cloudflareAction("doctor", record: record) }

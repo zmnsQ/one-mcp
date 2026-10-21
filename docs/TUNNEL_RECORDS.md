@@ -22,6 +22,11 @@ The existing MCP tool allowlist still applies inside each binding.
 }
 ```
 
+Optional `accountID` labels a user-declared local account and
+`credentialSourceRecordID` references a same-account, explicitly associated saved
+Keychain credential. Neither field contains a key. See
+[creation and credential reuse](TUNNEL_CREATION-2026-10-21.md).
+
 Optional `profileFile` selects an existing OpenAI profile. Cloudflare records use
 `transport: "cloudflare"` and the existing `cloudflare` settings object inside the
 record (executable, mode, tunnelID, credentialsFile, publicURL). Credentials stay

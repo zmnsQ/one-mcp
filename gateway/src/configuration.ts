@@ -27,7 +27,10 @@ export const tunnelRecordSchema = z.object({
     id: identifier, name: cleanString(100).min(1), serverIDs: z.array(identifier).max(16).refine(unique),
     transport: z.enum(['openai', 'cloudflare']), profile: cleanString(256), tunnelID: cleanString(256),
     profileFile: cleanString(4096).optional(), cloudflare: remoteConnectionSchema.shape.cloudflare,
-    startWithAll: z.boolean().optional()
+    startWithAll: z.boolean().optional(),
+    // Local user-declared identity and credential reference only, never a secret.
+    accountID: cleanString(100).refine(value => value.trim().length > 0, 'Account label must not be blank').optional(),
+    credentialSourceRecordID: identifier.optional()
 }).strict();
 export type TunnelRecord = z.infer<typeof tunnelRecordSchema>;
 export const preferencesSchema = z.object({

@@ -5,18 +5,19 @@ name, observed runtime status, a short MCP binding summary, one start/stop actio
 and an Edit button. It no longer repeats credential fields, provider forms,
 profile paths, diagnostic panels and destructive controls for every record.
 
-Add and Edit open a scrollable sheet. The user chooses a name and MCP services,
-then the connection provider. Custom profile paths and start-all participation
-are collapsed by default. Existing records have collapsed runtime details and
-authentication/maintenance sections. The page's first-connection/client guide
-is also collapsed below the records instead of preceding them.
+Add and Edit open a scrollable sheet. OpenAI setup is ordered as account and
+safe credential reference, explicit MCP bindings, then local Profile setup.
+New records use one “Create and save local Profile” primary action: persist the
+stable record first, invoke init, then wait for its correlated terminal result.
+No advanced section contains a required creation step. Existing profiles and
+Cloudflare use save-only mode; initialization never starts a tunnel.
 
-Edits are local drafts until Save/Add. Cancel does not append an empty record
-or modify configuration. Saving validates bindings, rejects stale workspace or
-configuration revisions, and preserves all other records. Runtime operations
-and persistent credential actions retain explicit confirmation. Authentication
-and diagnostic operations require the draft to be saved first. Running records
-can be inspected, but their configuration is locked until stopped.
+Edits remain drafts until the primary action. Before submission Cancel discards
+them; after a successful configuration save, Close preserves that record and any
+submitted creation. Running/creating records are locked, but Close stays available.
+Existing records default to save-only, so migration cannot initialize old profiles.
+See [creation and credential reuse](TUNNEL_CREATION-2026-10-21.md) for recovery,
+account association, tests and the difference from Platform remote creation.
 
 Verification in the Linux cloud workspace:
 - Changed Swift source and XCTest files passed tree-sitter syntax parsing.
