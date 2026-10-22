@@ -3,7 +3,6 @@
 from pathlib import Path
 import subprocess
 import tempfile
-import struct
 from PIL import Image
 root = Path(__file__).resolve().parents[1]
 source = root / 'docs/brand/one-mcp-icon.svg'
@@ -19,11 +18,5 @@ with tempfile.TemporaryDirectory() as temp:
             suffix = '@2x' if scale == 2 else ''
             Image.open(f'{temp}/{size * scale}.png').save(iconset / f'icon_{size}x{size}{suffix}.png')
     master = Image.open(f'{temp}/1024.png')
-    # PNG-backed Apple icon types include 16 px, plus explicit Retina variants.
-    chunks = []
-    for tag, size in [('icp4',16),('icp5',32),('icp6',64),('ic07',128),('ic08',256),('ic09',512),('ic10',1024),('ic11',32),('ic12',64),('ic13',256),('ic14',512)]:
-        data = Path(f'{temp}/{size}.png').read_bytes()
-        chunks.append(tag.encode('ascii') + struct.pack('>I', len(data) + 8) + data)
-    body = b''.join(chunks)
-    (root / 'Resources/AppIcon.icns').write_bytes(b'icns' + struct.pack('>I', len(body) + 8) + body)
+    # ICNS encoding is intentionally left to Apple iconutil during macOS packaging.
     master.save(root / 'docs/brand/one-mcp-icon.png')

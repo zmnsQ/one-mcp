@@ -21,7 +21,7 @@ APP="$OUT/One MCP.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources/gateway"
 cp "$BIN/MCPHarbor" "$APP/Contents/MacOS/MCPHarbor"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
-cp "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
+bash "$ROOT/scripts/build-app-icon.sh" "$APP/Contents/Resources/AppIcon.icns"
 cp -R "$ROOT/gateway/dist" "$ROOT/gateway/node_modules" "$APP/Contents/Resources/gateway/"
 cp "$ROOT/gateway/package.json" "$APP/Contents/Resources/gateway/"
 # Validate the exact packaged layout, including cli.js and transitive package resolution.
