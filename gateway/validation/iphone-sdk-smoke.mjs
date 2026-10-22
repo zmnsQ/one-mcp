@@ -33,7 +33,7 @@ for (const endpoint of ['/mcp','/servers/iphone-use/mcp']) {
 }
 const {execFile}=await import('node:child_process');
 const {promisify}=await import('node:util');
-const callCount=()=>events.filter(e=>e.type==='log'&&e.message?.startsWith('Calling enabled tool:')).length;
+const callCount=()=>events.filter(e=>e.type==='serviceCall'&&e.outcome==='started').length;
 const callsBeforeDiagnostic=callCount();
 const diagnostic=JSON.parse((await promisify(execFile)(process.execPath,['../scripts/diagnose-mcp.mjs',`http://127.0.0.1:${port}/mcp`])).stdout);
 assert.equal(callCount(),callsBeforeDiagnostic);assert.equal(diagnostic.protocolVersion,'2025-11-25');assert.equal(diagnostic.ok,true);assert.equal(diagnostic.toolCount,37);assert.equal(diagnostic.toolCalls,0);

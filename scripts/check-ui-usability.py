@@ -39,7 +39,9 @@ class UIContractTests(unittest.TestCase):
     def test_scroll_bounds_long_menu_lists(self):
         menu = read('MenuBarPanel.swift')
         self.assertIn('ScrollView {', menu)
-        self.assertIn('.frame(maxHeight: 280)', menu)
+        self.assertIn('.frame(height: statusListHeight)', menu)
+        self.assertIn('min(320, 112 + 36 *', menu)
+        self.assertNotIn('就绪不代表', menu)
         self.assertIn('.fixedSize(horizontal: false, vertical: true)', menu)
 
     def test_expanded_controls_are_outside_header_button(self):
@@ -81,7 +83,7 @@ class UIContractTests(unittest.TestCase):
         self.assertIn('failedSteps > 0', sidebar)
         self.assertIn('summary.failureCount > 0', sidebar)
         self.assertIn('store.cancelStartAll()', sidebar)
-        self.assertIn('结果是上次启动的记录，不代表当前状态', sidebar)
+        self.assertIn('上次全部启动结果', sidebar)
 
     def test_sidebar_controls_keep_confirmation_and_snapshot_guards(self):
         sidebar = read('SidebarRuntimeControls.swift')

@@ -89,7 +89,9 @@ enum ConfigurationReloadDecision: Equatable {
         if savedRevision == "missing", currentWorkspaceID == "default",
            !FileManager.default.fileExists(atPath: activeConfigurationURL.path) { return }
         guard let data = try? Data(contentsOf: activeConfigurationURL), data.count <= 1_048_576 else {
-            externalConfigurationNotice = "外部配置无法读取或超过大小限制，当前界面内容已保留。"; return
+            externalConfigurationNotice = "外部配置无法读取或超过大小限制，当前界面内容已保留。"
+            recordActivity(id: "external-read:\(currentWorkspaceID)", source: .external, action: "读取外部配置", object: "当前工作空间", outcome: .failed, details: ["配置无法读取或超过大小限制；本地内容已保留。"] )
+            return
         }
         let latest = revision(of: data)
         let decision = ConfigurationReloadDecision.decide(saved: savedRevision, disk: latest,
@@ -99,7 +101,8 @@ enum ConfigurationReloadDecision: Equatable {
             externalConfigurationNotice = nil
             return
         case .preserveEdits:
-            externalConfigurationNotice = "AI 已更新磁盘配置。你的未保存修改仍保留，请核对后选择是否载入磁盘版本。"
+            externalConfigurationNotice = "外部程序已更新磁盘配置。你的未保存修改仍保留，请核对后选择是否载入磁盘版本。"
+            recordActivity(id: "conflict:\(currentWorkspaceID):\(latest)", source: .external, action: "检测到配置更新", object: "当前工作空间", outcome: .pending, details: ["本地未保存修改已保留；需确认是否载入磁盘版本。没有自动应用到运行组件。"])
             return
         case .reload: break
         }
@@ -109,12 +112,16 @@ enum ConfigurationReloadDecision: Equatable {
             // Do not pair decoded bytes with a newer revision, or accept a workspace switch mid-read.
             guard data == (try? Data(contentsOf: activeConfigurationURL)),
                   !FileManager.default.fileExists(atPath: storageRoot.appendingPathComponent(".configuration-lock").path) else { return }
+            recordConfigurationActivity(from: savedPreferences, to: loaded, source: .external, revision: latest)
             preferences = loaded; savedPreferences = loaded; savedRevision = latest; storageReadable = true
             if !preferences.servers.contains(where: { $0.id == selectedID }) { selectedID = preferences.servers.first?.id }
             externalConfigurationNotice = nil
-            notice = "已同步 AI 或另一窗口保存的配置。没有启动或重启服务。"
+            notice = nil // Semantic activity records replace repetitive title banners.
             checkSetup()
-        } catch { externalConfigurationNotice = "外部配置未通过校验，当前界面内容已保留。" }
+        } catch {
+            externalConfigurationNotice = "外部配置未通过校验，当前界面内容已保留。"
+            recordActivity(id: "external-invalid:\(currentWorkspaceID):\(latest)", source: .external, action: "校验外部配置", object: "当前工作空间", outcome: .failed, details: ["外部配置未通过校验，当前界面内容已保留。"] )
+        }
     }
     func requireCurrentWorkspaceIndex() throws {
         guard savedIndexRevision == diskRevision(storageRoot.appendingPathComponent("workspaces.json")) else {

@@ -23,7 +23,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { ListToolsRequestSchema, CallToolRequestSchema, ToolListChangedNotificationSchema, Tool } from '@modelcontextprotocol/sdk/types.js';
+import { ListToolsRequestSchema, CallToolRequestSchema, ToolListChangedNotificationSchema, Tool, ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 
 type Config = {kind?: 'mcp'|'cli'; cli?: CLIServiceConfiguration; id: string; name: string; executable: string; arguments: string[];
   environment: Record<string, string>; workingDirectory?: string; allowedTools: string[] };
@@ -41,7 +41,7 @@ const portIndex = process.argv.indexOf('--port');
 const port = portIndex >= 0 ? Number(process.argv[portIndex + 1]) : 8787;
 if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error('Invalid loopback port');
 // Freeze actual startup settings. Saved-file edits never mutate these values.
-const configurationFingerprints = {...gatewayConfigurationFingerprints(process.execPath, process.argv[1] ?? '', port), cliServiceVersion:configurationFingerprint(['1'])};
+const configurationFingerprints = {...gatewayConfigurationFingerprints(process.execPath, process.argv[1] ?? '', port), cliServiceVersion:configurationFingerprint(['1']), liveToolSelectionVersion:configurationFingerprint(['1'])};
 const tunnelBindings = new Map<string, TunnelBinding>();
 const recordAuth = new Map<string, RemoteAuth>();
 const recordOrigins = new Set<string>();
@@ -135,6 +135,34 @@ function safeMessage(value: unknown, config?: Config): string {
   return text.replace(/Bearer\s+\S+/gi, 'Bearer [redacted]')
     .replace(/(api[_-]?key|token|password|secret)([=:]\s*)\S+/gi, '$1$2[redacted]').slice(0, 1000);
 }
+function validatedAllowedTools(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 500 || value.some(x => typeof x !== 'string' || !x || x.length > 256 || x.includes('\0') || x === '*') || new Set(value).size !== value.length)
+    throw new Error('Explicit unique tool allowlist is required (maximum 500 names)');
+  return [...value];
+}
+function updateAllowedTools(params: Record<string, unknown>): object {
+  if (Object.keys(params).some(key => !['serverId', 'allowedTools', 'expectedAllowedTools', 'expectedInstanceID'].includes(key)))
+    throw new Error('Unexpected allowlist update parameter');
+  if (typeof params.serverId !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(params.serverId)) throw new Error('Invalid server id');
+  const allowedTools = validatedAllowedTools(params.allowedTools);
+  const expectedAllowedTools = validatedAllowedTools(params.expectedAllowedTools);
+  const m = managed.get(params.serverId);
+  if (!m?.ready || !isCurrent(m)) throw new Error('Server is not running');
+  if (m.config.allowedTools.length !== expectedAllowedTools.length || expectedAllowedTools.some(name => !m.config.allowedTools.includes(name)))
+    throw new Error('Tool allowlist changed; refresh runtime state before retrying');
+  if (m.config.kind === 'cli' && allowedTools.some(name => !m.config.cli!.tools.some(tool => tool.name === name)))
+    throw new Error('CLI allowlist contains undefined tool');
+  // No await between comparison and replacement: admission switches atomically.
+  // Keep the upstream lifetime intact so already admitted calls can finish.
+  const config = {...m.config, allowedTools};
+  const fingerprints = serverConfigurationFingerprints(config);
+  m.config = config;
+  m.configurationFingerprints = fingerprints;
+  const state = {serverId: config.id, name: config.name, status: 'running', allowedTools,
+    configurationFingerprintVersion, configurationFingerprints: fingerprints, clientRefreshRequired: true};
+  emit({type: 'serverStatus', ...state});
+  return state;
+}
 function validated(raw: unknown): Config {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Missing server config');
   const c = raw as Config;
@@ -142,7 +170,7 @@ function validated(raw: unknown): Config {
   if (typeof c.name !== 'string' || c.name.length > 100) throw new Error('Invalid display name');
   if (typeof c.executable !== 'string' || !isAbsolute(c.executable) || c.executable.includes('\0')) throw new Error('Executable must be an absolute path');
   if (!Array.isArray(c.arguments) || c.arguments.length > 128 || c.arguments.some(x => typeof x !== 'string' || x.length > 8192 || x.includes('\0'))) throw new Error('Invalid arguments');
-  if (!Array.isArray(c.allowedTools) || c.allowedTools.length > 500 || c.allowedTools.some(x => typeof x !== 'string' || !x || x.length > 256 || x.includes('\0') || x === '*')) throw new Error('Explicit tool allowlist is required');
+  c.allowedTools = validatedAllowedTools(c.allowedTools);
   if (!c.environment || Array.isArray(c.environment) || typeof c.environment !== 'object' || Object.keys(c.environment).length > 128) throw new Error('Invalid environment');
   for (const [key, value] of Object.entries(c.environment)) {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key) || typeof value !== 'string' || value.length > 65536 || value.includes('\0')) throw new Error('Invalid environment item');
@@ -256,6 +284,7 @@ async function start(raw: unknown): Promise<void> {
     catch { if (isCurrent(m)) emit({ type: 'log', serverId: config.id, message: 'Tool catalogue refresh failed; tools hidden until discovery succeeds' }); }
   });
   managed.set(config.id, m);
+  emit({ type: 'serverStatus', serverId: config.id, status: 'starting' });
   try {
     await client.connect(transport, { timeout: 15000, signal: m.lifetime.signal });
     await discover(m);
@@ -397,11 +426,16 @@ async function handleHttp(req: IncomingMessage, res: ServerResponse): Promise<vo
     const m = route.managed;
     if (m.calls >= 4) throw new Error('Upstream concurrency limit reached');
     m.calls++;
-    emit({ type: 'log', serverId: m.config.id, message: `Calling enabled tool: ${route.tool.name}` });
+    emit({ type: 'serviceCall', serverId: m.config.id, outcome: 'started' });
     try {
-      return await m.client.callTool({ name: route.tool.name, arguments: request.params.arguments ?? {} }, undefined,
+      const result = await m.client.callTool({ name: route.tool.name, arguments: request.params.arguments ?? {} }, undefined,
         { timeout: m.config.kind === 'cli' ? m.config.cli!.timeoutMs + 5000 : 60000, signal: AbortSignal.any([extra.signal, m.lifetime.signal]) });
+      emit({ type: 'serviceCall', serverId: m.config.id, outcome: result.isError === true ? 'failed' : 'succeeded', ...(result.isError === true ? {reason: 'tool_error'} : {}) });
+      return result;
     } catch (error) {
+      emit({ type: 'serviceCall', serverId: m.config.id, outcome: 'failed',
+        reason: extra.signal.aborted || m.lifetime.signal.aborted ? 'cancelled'
+          : error instanceof McpError && error.code === ErrorCode.RequestTimeout ? 'timeout' : 'upstream_error' });
       return { isError: true, content: [{ type: 'text' as const, text: safeMessage(error, m.config) }] };
     } finally { m.calls--; }
   });
@@ -454,6 +488,7 @@ async function perform(command: ControlRequest): Promise<ControlResponse> {
         result = command.method === 'snapshot' ? boundRuntimeSnapshot(snapshot) : snapshot;
         break; }
       case 'startServer': await start(command.params?.server); break;
+      case 'updateAllowedTools': result = updateAllowedTools(command.params ?? {}); break;
       case 'stopServer': { const id = requireID(); await cloudflareManager.stopAll(); await Promise.all([...tunnelBindings.values()].filter(b => b.provider === 'cloudflare' && b.serverIDs.includes(id)).map(b => cloudflareRecords.stop(b.key))); await tunnelManager.stopForServer(id); await stop(id); break; }
       case 'listTools': {
         const m = managed.get(requireID());

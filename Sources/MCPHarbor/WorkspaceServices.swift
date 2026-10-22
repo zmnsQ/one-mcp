@@ -168,7 +168,7 @@ final class LocalOnlySessionDelegate: NSObject, URLSessionTaskDelegate, @uncheck
         healthTasks.values.forEach { $0.cancel() }; healthTasks = [:]; tunnelHealthURLs = [:]; tunnelHealthSnapshots = [:]; cloudflarePublicURL = nil; recordCloudflarePublicURLs = [:]; requestTraces = []; connectionEvents = []
         clearPendingCommands(); gateway = nil; tunnels = [:]; gatewayState = "Stopped"
         runtimeValues = [:]; tunnelKey = ""; recordTunnelKeys = [:]; recordTunnelKeyAccountIDs = [:]; redactionValues = []; tools = [:]; states = [:]; tunnelStates = [:]; tunnelMenuStates = [:]
-        logs = []; notice = nil; toolChanges = [:]; selectedID = nil; doctorPassed = [:]; tunnelReady = [:]; initializedTargets = [:]; checkedTargets = [:]; profileCreation = [:]; profileCreationOperationIDs = [:]
+        logs = []; serviceLogs = ServiceLogBuffer(); activities = []; notice = nil; toolChanges = [:]; selectedID = nil; doctorPassed = [:]; tunnelReady = [:]; initializedTargets = [:]; checkedTargets = [:]; profileCreation = [:]; profileCreationOperationIDs = [:]
     }
     private var vaultAccounts: [String] {
         preferences.servers.flatMap { server in server.environmentKeys.map { credentialKey(serverID: server.id, variable: $0) } } + ["__tunnel_key"] + preferences.effectiveTunnelRecords.map { "__tunnel_record:" + $0.id }

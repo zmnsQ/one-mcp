@@ -20,6 +20,11 @@ try {
  const a=await gui.snapshot(),b=await ai.snapshot();assert.equal(a.instanceID,b.instanceID);assert.equal(a.pid,b.pid);
  await ai.command('startServer',{server:{id:'shared',name:'Shared',executable:process.execPath,arguments:[resolve('validation/mock-server.mjs')],environment:{},allowedTools:['echo']}});
  const s=await gui.snapshot();assert.equal(s.servers[0].running,true);assert.ok(s.servers[0].tools.some(t=>t.name==='echo'));
+ await gui.command('updateAllowedTools',{serverId:'shared',allowedTools:[],expectedAllowedTools:['echo']});
+ assert.deepEqual((await ai.snapshot()).servers[0].allowedTools,[]);
+ await assert.rejects(ai.command('updateAllowedTools',{serverId:'shared',allowedTools:['echo'],expectedAllowedTools:['echo']}),/allowlist changed/);
+ await ai.command('updateAllowedTools',{serverId:'shared',allowedTools:['echo'],expectedAllowedTools:[]});
+ assert.deepEqual((await gui.snapshot()).servers[0].allowedTools,['echo']);
  await gui.command('stopServer',{serverId:'shared'});assert.equal((await ai.snapshot()).servers.length,0);
  assert.throws(()=>validateIdentity({...a,workspaceID:'other'},'/fixture','default'));
  assert.throws(()=>validateIdentity({...a,controlRoot:'/other'},'/fixture','default'));

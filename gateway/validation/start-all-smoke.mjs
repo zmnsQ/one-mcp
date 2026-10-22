@@ -28,5 +28,7 @@ const store=await fs.readFile('../Sources/MCPHarbor/HarborStore.swift','utf8');
 assert.match(store,/params\["key"\] as\? String/);
 assert.match(store,/func stopGateway\(\) \{\s*cancelStartAll/);
 const view=await fs.readFile('../Sources/MCPHarbor/HarborView.swift','utf8');
-assert.match(view,/approve\(store.startAllConfirmation\)/);
+assert.match(view,/SidebarRuntimeControls\(confirm:/);
+const sidebar=await fs.readFile('../Sources/MCPHarbor/SidebarRuntimeControls.swift','utf8');
+assert.match(sidebar,/confirm\(store.startAllConfirmation\)/);
 console.log('PASS native bulk source contracts: dependency ordering, cancellation, config snapshot, pending guards and no credential/profile creation (Swift not executed)');

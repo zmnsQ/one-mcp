@@ -16,6 +16,7 @@ struct SidebarRuntimeControls: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            SidebarActivityView(confirm: confirm)
             Divider()
             Button { showDetails = true } label: {
                 VStack(alignment: .leading, spacing: 6) {
@@ -143,7 +144,7 @@ private struct RuntimeStatusDetails: View {
                             if store.startAllBusy {
                                 Button("取消后续启动") { store.cancelStartAll() }
                             }
-                            Text("结果是上次启动的记录，不代表当前状态。修正问题后可在左侧再次全部启动；已运行项目不会重复启动。")
+                            Text("修正问题后可再次全部启动。")
                                 .font(.callout).foregroundStyle(.secondary)
                         }
                     }

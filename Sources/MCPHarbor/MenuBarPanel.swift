@@ -18,30 +18,25 @@ struct MenuBarPanel: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    statusSection("MCP 服务", count: store.menuServers.count) {
-                        if store.menuServers.isEmpty {
-                            Text("尚未添加 MCP 服务").foregroundStyle(.secondary)
-                        }
-                        ForEach(store.menuServers, id: \.id) { server in
-                            MenuStatusRow(name: server.name, status: store.menuServerStatus(server.id))
+                    statusSection("隧道", count: store.menuTunnelIDs.count) {
+                        if store.menuTunnelIDs.isEmpty { Text("暂无隧道").foregroundStyle(.secondary) }
+                        ForEach(store.menuTunnelIDs, id: \.self) { id in
+                            MenuStatusRow(name: store.menuTunnelName(id), status: store.menuTunnelStatus(id))
                         }
                     }
                     Divider()
-                    statusSection("隧道", count: store.menuTunnelIDs.count) {
-                        if store.menuTunnelIDs.isEmpty {
-                            Text("尚未添加隧道").foregroundStyle(.secondary)
-                        }
-                        ForEach(store.menuTunnelIDs, id: \.self) { id in
-                            MenuStatusRow(name: store.menuTunnelName(id), status: store.menuTunnelStatus(id))
+                    statusSection("MCP 服务", count: store.menuServers.count) {
+                        if store.menuServers.isEmpty { Text("暂无 MCP 服务").foregroundStyle(.secondary) }
+                        ForEach(store.menuServers, id: \.id) { server in
+                            MenuStatusRow(name: server.name, status: store.menuServerStatus(server.id))
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxHeight: 280)
-            Label("就绪不代表远端调用已验证", systemImage: "info.circle")
-                .font(.system(size: 13)).foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
+            // A maxHeight alone can collapse ScrollView to zero in MenuBarExtra's
+            // content-sized window. Reserve real space for both sections, even empty.
+            .frame(height: statusListHeight)
             Divider()
             Button {
                 openWindow(id: "main")
@@ -62,6 +57,10 @@ struct MenuBarPanel: View {
         .padding(18)
         .frame(width: 360)
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private var statusListHeight: CGFloat {
+        CGFloat(min(320, 112 + 36 * (max(1, store.menuTunnelIDs.count) + max(1, store.menuServers.count))))
     }
 
     private func statusSection<Content: View>(_ title: String, count: Int,

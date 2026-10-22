@@ -80,13 +80,16 @@ try {
   assert.equal((await gateway.raw('/mcp',' '.repeat(1024*1024+1))).status,413);
   assert.equal((await gateway.raw('/health','',{method:'GET'})).status,200);pass('oversized streaming body receives 413 and gateway remains healthy');
   assert.equal((await gateway.raw('/mcp',{jsonrpc:'2.0',method:'notifications/initialized'})).status,202);pass('stateless initialized notification accepted');
+  const callStarts=()=>gateway.events.filter(e=>e.type==='serviceCall'&&e.serverId==='normal'&&e.outcome==='started').length;
+  const startsBefore=callStarts();
   const controllers=Array.from({length:4},()=>new AbortController());
   const calls=controllers.map(controller=>gateway.rpc('tools/call',{name:'delay',arguments:{ms:30000}},'normal',{signal:controller.signal}).catch(error=>error));
   // stats shares the same concurrency limit, so wait until four call logs are visible.
-  await eventually(()=>gateway.events.filter(e=>e.type==='log'&&e.serverId==='normal'&&e.message==='Calling enabled tool: delay').length===4);
+  await eventually(()=>callStarts()===startsBefore+4);
   assert.ok((await gateway.call('normal','delay',{ms:1})).error);
   controllers.forEach(controller=>controller.abort());await Promise.all(calls);
   await eventually(async()=>{const result=await gateway.call('normal','stats');if(!result.result)return false;const stats=JSON.parse(result.result.content[0].text);return stats.active===0&&stats.cancelled===4;});
+  assert.ok(gateway.events.filter(e=>e.type==='serviceCall'&&e.serverId==='normal'&&e.reason==='cancelled').length>=4);
   pass('per-upstream concurrency is bounded and HTTP disconnect cancels upstream work');
   const crashPid=(await gateway.stats('normal')).pid;
   await gateway.call('normal','control',{crash:true});
@@ -101,6 +104,7 @@ try {
   assert.equal(JSON.stringify(gateway.events).includes('private-prefix'),false);pass('discovery errors redact overlapping configured secrets before IPC delivery');
   const started=Date.now();
   const timed=await gateway.call('normal','delay',{ms:65000});
+  assert.ok(gateway.events.some(e=>e.type==='serviceCall'&&e.serverId==='normal'&&e.reason==='timeout'));
   assert.equal(timed.result.isError,true);assert.match(timed.result.content[0].text,/timed out/i);
   assert.ok(Date.now()-started>=59000&&Date.now()-started<68000);
   await eventually(async()=>{const stats=await gateway.stats('normal');return stats.active===0&&stats.cancelled===1;});

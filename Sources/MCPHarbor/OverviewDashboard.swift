@@ -4,6 +4,7 @@ import AppKit
 /// A read-only projection of the shared runtime. Actions use the existing store commands.
 struct OverviewDashboard: View {
     @EnvironmentObject private var store: HarborStore
+    @State private var logServer: ServerConfig?
     let onAddService: () -> Void
     let onSelectService: (String) -> Void
     let onOpenTunnels: () -> Void
@@ -21,7 +22,7 @@ struct OverviewDashboard: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                HStack(alignment: .top, spacing: 16) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], alignment: .leading, spacing: 16) {
                     metric("本地网关", value: store.menuGatewayStatus.title, icon: "network", color: store.menuGatewayStatus.color)
                     metric("MCP 服务运行", value: store.menuGatewayStatus == .unknown ? "未确认" : "\(runningServices) / \(store.menuServers.count)", icon: "shippingbox.fill", color: .blue)
                     metric("隧道运行", value: store.menuGatewayStatus == .unknown ? "未确认" : "\(activeTunnels) / \(store.menuTunnelIDs.count)", icon: "point.3.connected.trianglepath.dotted", color: .teal)
@@ -32,14 +33,13 @@ struct OverviewDashboard: View {
                     Button("添加 / 管理隧道", systemImage: "network") { onOpenTunnels() }
                     Button("查看诊断", systemImage: "waveform.path.ecg") { onOpenLogs() }
                     Spacer()
-                    Text("本地就绪 ≠ 远端调用已验证").font(.caption).foregroundStyle(.secondary)
                 }
                 if !store.gatewayReady {
                     HStack(alignment: .top, spacing: 12) {
                         Image(systemName: store.menuGatewayStatus.symbol).foregroundStyle(store.menuGatewayStatus.color)
                         VStack(alignment: .leading, spacing: 4) {
                             Text(store.menuGatewayStatus == .unknown ? "网关状态未确认" : "先准备本地网关").font(.headline)
-                            Text(store.menuGatewayStatus == .unknown ? "界面未能确认共享网关状态，不代表后台服务已停止。" : "可以先添加服务和隧道。使用顶部启动网关，再明确启动需要的项目。")
+                            Text(store.menuGatewayStatus == .unknown ? "请重新连接网关以获取最新状态。" : "可以先添加服务和隧道。使用左侧启动网关，再启动需要的项目。")
                                 .font(.callout).foregroundStyle(.secondary)
                         }
                         Spacer()
@@ -51,7 +51,7 @@ struct OverviewDashboard: View {
                         Text("三步连接你的工具").font(.title3.bold())
                         onboardingStep("1", title: "添加 MCP 服务", detail: "导入或填写工具程序；默认不会开放工具。")
                         onboardingStep("2", title: "启动并选择工具", detail: "确认程序来源，再选择允许调用的工具。")
-                        onboardingStep("3", title: "创建独立隧道", detail: "选择 OpenAI 或 Cloudflare，明确绑定服务并验证连接。")
+                        onboardingStep("3", title: "创建隧道", detail: "选择 OpenAI 或 Cloudflare，明确绑定服务并验证连接。")
                         Button("添加第一个 MCP", action: onAddService).buttonStyle(.borderedProminent)
                     }.dashboardCard()
                 }
@@ -59,14 +59,11 @@ struct OverviewDashboard: View {
                 LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
                     ForEach(store.preferences.servers) { server in serviceCard(server) }
                 }
-                HStack {
-                    Text("独立隧道").font(.title3.bold()); Spacer()
-                    Button("连接设置", action: onOpenTunnels)
-                }
                 TunnelRecordsView().environmentObject(store)
-                Text("总览使用当前网关的状态事件，不会为显示卡片自动启动进程或创建公网入口。共享网关断开时，状态显示为未确认。")
-                    .font(.caption).foregroundStyle(.secondary)
             }.padding(24)
+        }
+        .sheet(item: $logServer) { server in
+            ServiceLogView(server: server).environmentObject(store)
         }
     }
     private func metric(_ title: String, value: String, icon: String, color: Color) -> some View {
@@ -102,6 +99,7 @@ struct OverviewDashboard: View {
             Divider()
             HStack {
                 Button("详情") { onSelectService(server.id) }
+                Button("日志", systemImage: "text.alignleft") { logServer = server }
                 Button("复制本机地址") {
                     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(store.endpoint(server), forType: .string)
                 }.help("仅本机 loopback 地址，不是公网入口")

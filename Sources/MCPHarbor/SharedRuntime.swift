@@ -40,6 +40,8 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
         appliedGatewayFingerprints = ConfigurationFingerprint.decode(snapshot)
         appliedServerFingerprints = [:]; appliedTunnelFingerprints = [:]
         let servers = snapshot["servers"] as? [[String: Any]] ?? []
+        let previousServers = sharedRuntimeServers
+        let previousStates = states
         sharedRuntimeServers = servers.compactMap { item in
             guard let id = item["id"] as? String else { return nil }
             return SharedServerSummary(id: id, name: item["name"] as? String ?? id, running: item["running"] as? Bool ?? false, allowedTools: item["allowedTools"] as? [String] ?? [], permissionsKnown: item["allowedTools"] is [String])
@@ -52,7 +54,16 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
         states = [:]; tools = [:]
         for server in servers {
             guard let id = server["id"] as? String else { continue }
-            states[id] = server["running"] as? Bool == true ? "running" : "stopped"
+            let nextState = server["running"] as? Bool == true ? "running" : "stopped"
+            if previousStates[id] != nil {
+                recordObservedServerActivity(serverID: id, previous: previousStates[id], status: nextState)
+            }
+            if nextState == "running", let previous = previousServers.first(where: { $0.id == id && $0.permissionsKnown }),
+               let allowed = server["allowedTools"] as? [String], Set(previous.allowedTools) != Set(allowed) {
+                recordActivity(source: .system, action: "更新运行工具权限", object: previous.name, outcome: .applied,
+                    details: ["当前授权 \(allowed.count) 项工具。"])
+            }
+            states[id] = nextState
             appliedServerFingerprints[id] = ConfigurationFingerprint.decode(server)
             if let catalogue = server["tools"] as? [[String: Any]],
                let data = try? JSONSerialization.data(withJSONObject: ["type":"tools", "serverId":id, "tools":catalogue]),
@@ -66,6 +77,9 @@ struct SharedServerSummary: Identifiable { let id: String; let name: String; let
             guard let sequence = entry["sequence"] as? Int, sequence > sharedEventSequence,
                   let event = entry["event"] as? [String: Any] else { continue }
             sharedEventSequence = sequence
+            if let instanceID = snapshot["instanceID"] as? String {
+                recordServiceLogSnapshotEvent(event, instanceID: instanceID, sequence: sequence)
+            }
             if let message = event["message"] as? String { log(event["serverId"] as? String ?? "shared gateway", message) }
         }
     }

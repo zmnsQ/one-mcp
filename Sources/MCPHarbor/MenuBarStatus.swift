@@ -95,7 +95,8 @@ struct RuntimeStatusSummary: Equatable {
     }
     var menuTunnelIDs: [String] {
         let configured = preferences.effectiveTunnelRecords.map(\.id)
-        return configured + runningTunnelKeys.filter { !configured.contains($0) }.sorted()
+        let observed = runningTunnelKeys.union(tunnelMenuStates.keys)
+        return configured + observed.filter { !configured.contains($0) }.sorted()
     }
     func menuServerStatus(_ id: String) -> MenuBarStatus {
         guard menuRuntimeKnown else { return .unknown }
@@ -108,6 +109,6 @@ struct RuntimeStatusSummary: Equatable {
         return tunnelMenuStates[id] ?? (runningTunnelKeys.contains(id) ? .running : .stopped)
     }
     func menuTunnelName(_ id: String) -> String {
-        preferences.effectiveTunnelRecords.first(where: { $0.id == id })?.name ?? "运行中的隧道（\(id)）"
+        preferences.effectiveTunnelRecords.first(where: { $0.id == id })?.name ?? "隧道（\(id)）"
     }
 }

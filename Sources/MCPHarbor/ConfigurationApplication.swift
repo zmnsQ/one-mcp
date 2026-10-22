@@ -63,7 +63,7 @@ struct ConfigurationApplicationNotice: Identifiable {
         if fingerprints["kind"] != nil && !saved.isCLI { desired["kind"] = ConfigurationFingerprint.scalar("mcp"); desired["cli"] = ConfigurationFingerprint.strings([]) }
         return ConfigurationFingerprint.changed(desired, applied: fingerprints,
             labels: [("kind", "服务类型"), ("cli", "CLI 工具配置"), ("name", "工具说明名称"), ("executable", "程序"), ("arguments", "参数"), ("workingDirectory", "工作目录"),
-                     ("environmentKeys", "环境变量名称"), ("allowedTools", "工具白名单")])
+                     ("environmentKeys", "环境变量名称")] + (supportsLiveToolSelection ? [] : [("allowedTools", "工具白名单")]))
     }
     func tunnelRestartReasons(_ key: String) -> [String] {
         guard isGatewayRunning, runningTunnelKeys.contains(key) else { return [] }
@@ -111,6 +111,10 @@ struct ConfigurationApplicationNotice: Identifiable {
             result.append(.init(id: "gateway", title: "网关 · 待重启生效", detail: gatewayRestartReasons.joined(separator: "、")))
         }
         for server in savedPreferences.servers {
+            if supportsLiveToolSelection, let live = sharedRuntimeServers.first(where: { $0.id == server.id && $0.running && $0.permissionsKnown }),
+               Set(live.allowedTools) != Set(server.allowedTools) {
+                result.append(.init(id: "tools:" + server.id, title: server.name + " · 工具选择待应用", detail: "已保存的选择与当前权限不同。在工具卡片区点击保存并应用，无需停止服务。"))
+            }
             let reasons = serverRestartReasons(server.id)
             if !reasons.isEmpty {
                 result.append(.init(id: "server:" + server.id, title: server.name + " · 待重启生效", detail: reasons.joined(separator: "、")))

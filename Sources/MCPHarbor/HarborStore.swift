@@ -8,6 +8,7 @@ import AppKit
     @Published var workspaces: [WorkspaceRecord] = []
     @Published var currentWorkspaceID = "default"
     @Published var setupChecks: [CheckResult] = []
+    @Published var activities: [ActivityRecord] = []
     @Published var notice: String?
     @Published var toolChanges: [String: String] = [:]
     @Published var tunnelReady: [String: Bool] = [:]
@@ -58,6 +59,7 @@ import AppKit
     @Published var recordCloudflarePublicURLs: [String: String] = [:]
     @Published var tools: [String: [ToolInfo]] = [:]
     @Published var logs: [LogLine] = []
+    @Published var serviceLogs = ServiceLogBuffer()
     @Published var errorMessage: String?
     // Secrets are deliberately memory-only, excluded from Codable and persistence.
     @Published var runtimeValues: [String: String] = [:]
@@ -114,10 +116,11 @@ import AppKit
             try FileManager.default.createDirectory(at: workspaceDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
             try encoder.encode(preferences).write(to: activeConfigurationURL, options: .atomic)
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: activeConfigurationURL.path)
+            recordConfigurationActivity(from: savedPreferences, to: preferences, source: .user, revision: configurationRevision())
             savedPreferences = preferences
             savedRevision = configurationRevision()
             externalConfigurationNotice = nil
-            if anyProcessRunning { notice = "配置已保存；运行中的服务不变，需明确重启相关服务后生效。" }
+            if anyProcessRunning { notice = "配置已保存；运行中的服务不变。工具选择可单独应用，进程与连接配置需重启相关服务后生效。" }
             return true
         } catch { errorMessage = error.localizedDescription; return false }
     }
@@ -126,6 +129,7 @@ import AppKit
         cancelStartAll()
         if isGatewayRunning { command("stopServer", params: ["serverId": server.id]) }
         tools[server.id] = nil; states[server.id] = nil; toolChanges[server.id] = nil
+        serviceLogs.clear(serverID: server.id)
         for key in Array(runtimeValues.keys) where key.hasPrefix(server.id + ":") {
             if let value = runtimeValues.removeValue(forKey: key), !value.isEmpty { redactionValues.insert(value) }
         }
@@ -251,6 +255,7 @@ import AppKit
     }
     func consumeEvent(_ line: String) {
         guard let data = line.data(using: .utf8), let event = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else { log("gateway", line); return }
+        recordServiceLogEvent(event)
         let id = event["serverId"] as? String ?? "gateway"
         switch event["type"] as? String {
         case "legacyGatewayAvailable":
@@ -269,7 +274,15 @@ import AppKit
                 if commandResults.count > 100 { commandResults = [:] }
                 commandResults[requestID] = event["ok"] as? Bool == true ? "ok" : redacted(event["error"] as? String ?? "网关未确认操作成功")
                 let context = commandContexts.removeValue(forKey: requestID)
+                if let context { recordCommandActivity(requestID: requestID, method: context.method, serverID: context.serverID, succeeded: event["ok"] as? Bool == true) }
                 pendingCommands[requestID] = nil
+                if let context, context.method == "updateAllowedTools" {
+                    if event["ok"] as? Bool == true {
+                        notice = "工具选择已在网关生效，无需停止服务；在途调用继续完成。客户端需刷新工具列表，未刷新的客户端请重新连接。其他进程配置未应用。"
+                    } else {
+                        errorMessage = "工具选择已保存，但未应用到运行组件：" + redacted(event["error"] as? String ?? "网关未确认") + "。当前权限以运行状态为准，请重新核对后应用。"
+                    }
+                }
                 if event["ok"] as? Bool == false, let context, let key = context.serverID,
                    ["tunnelAction", "cloudflareAction", "startTunnel", "startCloudflare", "stopTunnel", "stopCloudflare"].contains(context.method) {
                     tunnelMenuStates[key] = .failed
@@ -333,6 +346,12 @@ import AppKit
             attachedPort = event["port"] as? Int
             appliedGatewayFingerprints = ConfigurationFingerprint.decode(event)
         case "serverStatus":
+            recordObservedServerActivity(serverID: id, previous: states[id], status: event["status"] as? String)
+            if let previous = sharedRuntimeServers.first(where: { $0.id == id && $0.permissionsKnown }),
+               event["status"] as? String == "running", let allowed = event["allowedTools"] as? [String], Set(previous.allowedTools) != Set(allowed) {
+                recordActivity(source: .system, action: "更新运行工具权限", object: previous.name, outcome: .applied,
+                    details: ["当前授权 \(allowed.count) 项工具。"])
+            }
             states[id] = event["status"] as? String ?? "unknown"
             appliedServerFingerprints[id] = ConfigurationFingerprint.decode(event)
             if event["status"] as? String == "running" {
@@ -390,7 +409,7 @@ import AppKit
                 try? await Task.sleep(nanoseconds: 60_000_000_000)
                 guard !Task.isCancelled, let self, self.pendingCommands[id] != nil else { return }
                 if let key = serverID, ["tunnelAction", "cloudflareAction", "startTunnel", "startCloudflare", "stopTunnel", "stopCloudflare"].contains(method) { self.tunnelMenuStates[key] = .unknown }
-                self.errorMessage = "网关尚未确认 \(method)。操作可能仍在执行；请查看日志，必要时全部停止后重试。"
+                self.errorMessage = method == "updateAllowedTools" ? "工具更新尚未确认，可能已生效；请核对运行状态，勿重复提交。无需停止全部服务。" : "网关尚未确认 \(method)。操作可能仍在执行；请查看日志，必要时全部停止后重试。"
                 // Keep the pending marker until a real response or gateway exit, preventing duplicate starts.
             }
             return true

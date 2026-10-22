@@ -13,6 +13,7 @@ Node.js 22 或更高版本；`@modelcontextprotocol/sdk` 1.32.1，MIT，依据20
 管理方法：
 - startServer：params.server包含id/name/executable/arguments/environment/workingDirectory/allowedTools。
 - stopServer：params.serverId，格式与配置id相同；有效但已停止的id可重复停止。
+- updateAllowedTools：params包含serverId、allowedTools和expectedAllowedTools，可选expectedInstanceID；仅更新正在运行实例的白名单，不重启进程或隧道。两个数组均须不重复、最多500项、每项1–256字符且不能包含NUL或为星号；拒绝额外字段。expectedAllowedTools按集合比较，冲突则不修改，需刷新状态后重试。CLI工具必须在已配置描述符中。
 - listTools：params.serverId，重新发现分页工具。
 - shutdown：先返回成功响应，再关闭HTTP和子进程。
 
@@ -27,7 +28,7 @@ executable须为用户选择的绝对路径，参数数组直接传给进程，�
 - 聚合：`http://127.0.0.1:8787/mcp`
 - 独立：`http://127.0.0.1:8787/servers/<server-id>/mcp`
 
-两者为stateless Streamable HTTP，POST为主要方法；GET/DELETE返回405，不提供SSE恢复或服务器主动推送。客户端发notifications/initialized时由SDK处理。工具清单读取下游原始JSON schema及描述；仅allowedTools白名单内工具可见可调用。默认空白名单即不暴露工具，不能用星号表示全开。修改白名单需要停止该MCP后用新配置重启。
+两者为stateless Streamable HTTP，POST为主要方法；GET/DELETE返回405，不提供SSE恢复或服务器主动推送。客户端发notifications/initialized时由SDK处理。工具清单读取下游原始JSON schema及描述；仅allowedTools白名单内工具可见可调用。默认空白名单即不暴露工具，不能用星号表示全开。可通过updateAllowedTools即时修改运行时白名单；后续tools/list和tools/call在聚合、独立及隧道绑定出口使用新集合，已准入调用可完成。管理响应及serverStatus事件返回权威allowedTools、configurationFingerprints和clientRefreshRequired:true。客户端需重新获取工具列表或重连，本实现不声明listChanged能力、不发送服务器主动通知。运行时修改不自动写入磁盘；应用负责保存配置。旧网关须升级一次，ready/status中的liveToolSelectionVersion配置指纹用于检测支持。
 
 聚合名称是server-id前10字符、工具名规范化前39字符与10位哈希组成，避免重复名和超长；不要用简单的UUID__原名猜测远程工具名。调用只路由到对应服务器的原始工具名。单独出口保留原始工具名。发现时拒绝重复工具名、循环分页、超过20页或1000个工具的目录。
 

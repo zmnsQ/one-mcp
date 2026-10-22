@@ -37,9 +37,9 @@ struct HarborView: View {
     @State private var showAddMCP = false
     @State private var importAfterAddDismiss = false
     @State private var showLogs = false
+    @State private var serviceLogServer: ServerConfig?
     @State private var showDiagnostics = false
     @State private var showRuntimeInstances = false
-    @State private var toolSearch = ""
     @State private var showWorkspaceSheet = false
     @State private var workspaceName = ""
     private var selectedIndex: Int? { store.preferences.servers.firstIndex { $0.id == store.selectedID } }
@@ -78,24 +78,6 @@ struct HarborView: View {
                         }.disabled(store.takeoverBusy)
                     }.padding(12).background(Color.orange.opacity(0.08))
                 }
-                if let externalNotice = store.externalConfigurationNotice {
-                    HStack(alignment: .top, spacing: 10) {
-                        Image(systemName: "arrow.triangle.2.circlepath").foregroundStyle(.secondary)
-                        Text(externalNotice).font(.caption)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                        if store.initialConfigurationLoaded || !store.anyProcessRunning {
-                            Button("载入磁盘版本") {
-                                approve("载入磁盘中最新的配置？这会丢弃当前工作空间尚未保存的本地修改，以磁盘版本替换界面内容。不会启动或重启服务。") {
-                                    store.reloadExternalConfiguration(discardLocalChanges: true)
-                                }
-                            }.help("确认后放弃本地未保存修改，载入已保存的外部配置")
-                        }
-                    }.padding(12).background(Color.accentColor.opacity(0.06))
-                }
-                if let notice = store.notice, section == .settings || !store.preferences.servers.isEmpty {
-                    HStack { Image(systemName: "info.circle"); Text(notice).font(.caption); Spacer(); Button("关闭") { store.notice = nil } }.padding(12).background(Color.accentColor.opacity(0.08))
-                }
                 if !store.configurationApplicationNotices.isEmpty {
                     DisclosureGroup("已保存配置：\(store.configurationApplicationNotices.count) 项运行状态待处理") {
                         ScrollView {
@@ -122,7 +104,7 @@ struct HarborView: View {
                                         }
                                     }
                                 }
-                                Text("界面显示已保存的新配置；运行实例保持原样。仅在明确停止、再启动相关项目后生效。")
+                                Text("进程与隧道配置需明确停止、再启动相关项目后生效。工具选择可在服务页单独保存并应用；请以各项运行状态为准。")
                                     .font(.caption).foregroundStyle(.secondary)
                             }.frame(maxWidth: .infinity, alignment: .leading)
                         }.frame(maxHeight: 160)
@@ -143,6 +125,7 @@ struct HarborView: View {
         }
         .frame(minWidth: 1020, minHeight: 700)
 
+        .sheet(item: $serviceLogServer) { server in ServiceLogView(server: server).environmentObject(store) }
         .sheet(isPresented: $showWorkspaceSheet) {
             VStack(alignment: .leading, spacing: 18) {
                 Text("新建工作空间").font(.title2.bold())
@@ -198,7 +181,6 @@ struct HarborView: View {
                 HStack { Spacer(); Button("取消", role: .cancel) { showAddMCP = false } }
             }.padding(24).frame(width: 480)
         }
-        .onChange(of: section) { _, _ in store.notice = nil }
         .task(id: store.currentWorkspaceID) { store.autofillRememberedTunnelKey() }
         .toolbar {
             if store.hasUnsavedChanges {
@@ -239,21 +221,21 @@ struct HarborView: View {
         }
         showConfirmation = true
     }
-    private func lines(_ binding: Binding<[String]>) -> Binding<String> {
-        Binding(get: { binding.wrappedValue.joined(separator: "\n") }, set: { binding.wrappedValue = $0.components(separatedBy: "\n").filter { !$0.isEmpty } })
-    }
     private func serverEditor(index: Int) -> some View {
         let server = store.preferences.servers[index]
-        let running = ["running", "starting"].contains(store.states[server.id] ?? "") || store.hasPendingCommand(for: server.id)
+        let running = ["running", "starting", "stopping"].contains(store.states[server.id] ?? "") || store.hasPendingCommand(for: server.id)
         return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                HStack {
-                    VStack(alignment: .leading) { Text(server.name).font(.largeTitle.bold()); Text(serviceStatus(server.id)).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
-                    Spacer()
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(server.name).font(.largeTitle.bold()).fixedSize(horizontal: false, vertical: true)
+                    Text(serviceStatus(server.id)).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    HStack {
                     Button(server.isCLI ? "启动 CLI 服务" : "发现工具 / 启动", systemImage: "play.fill") {
                         approve("将在 Mac 上执行 \(server.executable) 及所填参数。程序具有你账户的文件与服务权限，不是沙箱；仅白名单工具可通过网关调用。若选择包管理器，还可能执行下载的程序。确认启动？") { store.startServer(server) }
                     }.buttonStyle(.glassProminent).disabled(running || !store.gatewayReady || store.startAllBusy)
                     Button("停止", systemImage: "stop.fill") { approve(ServiceStopImpact.message(name: server.name)) { store.stopServer(server) } }.buttonStyle(.glass).disabled(!running)
+                    Button("服务日志", systemImage: "doc.text.magnifyingglass") { serviceLogServer = server }.buttonStyle(.glass)
+                    }
                 }
                 if !store.serverRestartReasons(server.id).isEmpty {
                     Label("已保存修改，待重启此 MCP 生效：" + store.serverRestartReasons(server.id).joined(separator: "、"), systemImage: "arrow.clockwise.circle")
@@ -263,36 +245,17 @@ struct HarborView: View {
                     HStack {
                         Label("需要先启动本机网关", systemImage: "info.circle").font(.callout).foregroundStyle(.secondary)
                         Spacer()
-                        Text("点击顶部“启动网关”继续").font(.caption).foregroundStyle(.secondary)
+                        Text("点击左侧“启动网关”继续").font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Toggle("参与全部启动", isOn: Binding(get: { store.preferences.servers[index].participatesInStartAll },
                     set: { store.preferences.servers[index].startWithAll = $0 }))
                     .help("取消后仅从全部启动中排除，不会停止正在运行的服务，也不影响手动启动")
                     .disabled(store.startAllBusy)
-                GroupBox("进程配置") {
-                    Form {
-                        Picker("服务类型", selection: Binding(get: { server.kind ?? "mcp" }, set: { kind in
-                            guard kind != (store.preferences.servers[index].kind ?? "mcp") else { return }
-                            store.preferences.servers[index].kind = kind
-                            store.preferences.servers[index].cli = kind == "cli" ? CLIServiceConfiguration() : nil
-                            store.preferences.servers[index].allowedTools = []
-                            store.preferences.servers[index].startWithAll = false
-                        })) { Text("MCP 程序").tag("mcp"); Text("CLI 转 MCP").tag("cli") }
-                        Text("切换服务类型会清空工具定义与白名单，并取消参与全部启动。").font(.caption).foregroundStyle(.secondary)
-                        TextField("名称", text: $store.preferences.servers[index].name)
-                        TextField("可执行文件绝对路径", text: $store.preferences.servers[index].executable)
-                        VStack(alignment: .leading) { Text("参数：每行一个，不需要 shell 转义").font(.caption); TextEditor(text: lines($store.preferences.servers[index].arguments)).font(.system(.body, design: .monospaced)).frame(height: 65) }
-                        DisclosureGroup("高级：工作目录与环境变量") {
-                            TextField("工作目录", text: $store.preferences.servers[index].workingDirectory)
-                            VStack(alignment: .leading) {
-                                Text("环境变量名称：具体值只存在内存").font(.caption)
-                                TextEditor(text: lines($store.preferences.servers[index].environmentKeys))
-                                    .font(.system(.body, design: .monospaced)).frame(height: 60)
-                            }
-                        }
-                    }.formStyle(.grouped).disabled(running)
-                }
+                ToolSelectionView(server: $store.preferences.servers[index], confirm: { message, action in
+                    approve(message, action: action)
+                }).id(server.id)
+                ProcessConfigurationView(server: $store.preferences.servers[index], locked: running || store.startAllBusy)
                 if server.isCLI {
                     CLIServiceEditor(configuration: Binding(get: { store.preferences.servers[index].cli ?? CLIServiceConfiguration() }, set: { store.preferences.servers[index].cli = $0 }), allowedTools: $store.preferences.servers[index].allowedTools)
                         .disabled(running || store.startAllBusy)
@@ -305,14 +268,17 @@ struct HarborView: View {
                         }
                     }
                 }
-                DisclosureGroup("允许使用的工具（已选 \(server.allowedTools.count) 项）") {
-                    toolEditor(index: index).padding(.top, 12)
-                }
                 Button("移除服务器配置", role: .destructive) {
                     approve("停止连接并移除已保存的配置？不会删除 MCP 程序或其文件。") { store.removeServer(server) }
                 }.disabled(running)
             }.padding(24)
         }
+    }
+    private func toolLiveCount(_ id: String) -> String {
+        guard let runtime = store.sharedRuntimeServers.first(where: { $0.id == id && $0.running }) else {
+            return store.states[id] == "running" ? "生效待核对" : "未运行"
+        }
+        return runtime.permissionsKnown ? "生效 \(Set(runtime.allowedTools).count)" : "生效待核对"
     }
     private func serviceStatus(_ id: String) -> String {
         switch store.states[id] ?? "stopped" {
@@ -323,15 +289,6 @@ struct HarborView: View {
         case "failed", "error": "启动失败"
         default: "需要检查"
         }
-    }
-    private var serverPicker: some View {
-        Picker("服务器", selection: $store.selectedID) {
-            Text("请选择服务器").tag(nil as String?)
-            ForEach(store.preferences.servers) { server in
-                Text("\(server.name) · \(serviceStatus(server.id))").tag(Optional(server.id))
-            }
-        }.frame(maxWidth: 380)
-            .onChange(of: store.selectedID) { _, _ in toolSearch = "" }
     }
     private var serverWorkspace: some View {
         Group {
@@ -355,6 +312,8 @@ struct HarborView: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(server.name).font(.headline)
                                 Text(serviceStatus(server.id)).font(.caption).foregroundStyle(.secondary)
+                                Text("已选 \(Set(server.allowedTools).count) · " + toolLiveCount(server.id))
+                                    .font(.caption2).foregroundStyle(.secondary)
                                 if !store.serverRestartReasons(server.id).isEmpty {
                                     Text("待重启生效").font(.caption).foregroundStyle(.orange)
                                 }
@@ -372,7 +331,6 @@ struct HarborView: View {
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
         }
-        .onChange(of: store.selectedID) { _, _ in toolSearch = "" }
     }
     private var tunnelSettings: some View {
         ScrollView {
@@ -401,44 +359,6 @@ struct HarborView: View {
                     MCPRequestTracePanel().environmentObject(store)
                 }
             }.padding(24)
-        }
-    }
-    private func toolEditor(index: Int) -> some View {
-        let server = store.preferences.servers[index]
-        let running = ["running", "starting"].contains(store.states[server.id] ?? "") || store.hasPendingCommand(for: server.id)
-        return VStack(alignment: .leading, spacing: 18) {
-            TextField("搜索此服务器的工具名称或说明", text: $toolSearch).textFieldStyle(.roundedBorder)
-                if let change = store.toolChanges[server.id] {
-                    Label(change, systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
-                }
-                HStack {
-                    Button("刷新工具目录") { store.command("listTools", params: ["serverId": server.id]) }.disabled(store.states[server.id] != "running" || store.hasPendingCommand(for: server.id))
-                    Text("刷新只查询已启动的 MCP，不会自动扩大白名单。").font(.caption).foregroundStyle(.secondary)
-                }
-                GroupBox("工具白名单：默认不开放") {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("先发现工具并停止服务器，再勾选允许对外使用的工具，然后重新启动。配置下次启动时生效。").font(.caption).foregroundStyle(.secondary)
-                        if (store.tools[server.id] ?? []).isEmpty { VStack(alignment: .leading, spacing: 8) {
-                            Text("尚未发现工具。").foregroundStyle(.secondary)
-                            Text("使用本页上方的“发现工具 / 启动”读取工具目录。").font(.caption)
-                        } }
-                        if !toolSearch.isEmpty && !(store.tools[server.id] ?? []).contains(where: { $0.name.localizedCaseInsensitiveContains(toolSearch) || $0.description.localizedCaseInsensitiveContains(toolSearch) }) {
-                            Text("没有匹配的工具。试试其他关键词。").font(.callout).foregroundStyle(.secondary)
-                        }
-                        ForEach((store.tools[server.id] ?? []).filter { toolSearch.isEmpty || $0.name.localizedCaseInsensitiveContains(toolSearch) || $0.description.localizedCaseInsensitiveContains(toolSearch) }) { tool in
-                            Toggle(isOn: Binding(get: { store.preferences.servers[index].allowedTools.contains(tool.name) }, set: { enabled in
-                                if enabled { store.preferences.servers[index].allowedTools.append(tool.name) }
-                                else { store.preferences.servers[index].allowedTools.removeAll { $0 == tool.name } }
-                            })) {
-                                VStack(alignment: .leading) { Text(tool.name).font(.system(.body, design: .monospaced)); Text(tool.publicName).font(.system(.caption2, design: .monospaced)).foregroundStyle(.tertiary); Text(tool.description).font(.caption).foregroundStyle(.secondary) }
-                            }.disabled(running)
-                            DisclosureGroup("参数 schema 与 annotations（来自服务器）") {
-                                Text(tool.metadataJSON).font(.system(.caption, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                            }.font(.caption)
-                        }
-                        Text("已选： \(server.allowedTools.joined(separator: ", "))").font(.caption).textSelection(.enabled)
-                    }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
-                }
         }
     }
     private var connectionSettings: some View {
