@@ -58,6 +58,17 @@ class PresentationArchitecture(unittest.TestCase):
         self.assertNotIn('HarborStore',router)
         self.assertNotIn('startAll(',router)
         self.assertIn('.onReceive(navigationRouter.$destination)',read('HarborView.swift'))
+    def test_tray_lists_start_collapsed_and_actions_are_large(self):
+        s=read('MenuBarPanel.swift')
+        for t in ['serversExpanded = false', 'tunnelsExpanded = false',
+                  'DisclosureGroup(isExpanded: expanded)', 'FullRowDisclosureStyle()',
+                  'serversExpanded ? 12', 'tunnelsExpanded ? 12',
+                  'minHeight: 90', 'TrayActionStyle(tint: .red)',
+                  'store.menuGatewayStatus == .stopping', '.disabled(stopping ||',
+                  'store.gatewayStartBusy || stopping', 'accessibilityReduceMotion']:
+            self.assertIn(t,s)
+        self.assertEqual(s.count('Button(role: .destructive) { confirmStop() }'), 1)
+        self.assertEqual(s.count('Button { confirmStart() }'), 1)
     def test_tunnel_advanced_setup_is_still_reachable(self):
         s=read('HarborView.swift')
         for t in ['连接帮助与高级维护','RemoteConnectionSettingsView()','TunnelOnboardingGuide()','MCPRequestTracePanel()']:

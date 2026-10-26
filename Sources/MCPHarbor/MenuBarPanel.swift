@@ -7,6 +7,9 @@ struct MenuBarPanel: View {
     @EnvironmentObject private var store: HarborStore
     @Environment(\.openWindow) private var openWindow
 
+    @State private var serversExpanded = false
+    @State private var tunnelsExpanded = false
+
     private var workspaceName: String {
         store.workspaces.first(where: { $0.id == store.currentWorkspaceID })?.name ?? store.currentWorkspaceID
     }
@@ -49,27 +52,35 @@ struct MenuBarPanel: View {
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
             .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color(nsColor: .separatorColor).opacity(0.4)))
 
-            HStack(spacing: 10) {
-                Button { openMainWindow() } label: {
-                    Label("打开主窗口", systemImage: "macwindow").frame(maxWidth: .infinity)
-                }.buttonStyle(.borderedProminent)
+            HStack(spacing: 12) {
                 Button { confirmStart() } label: {
-                    RuntimeActionLabel(title: store.startAllBusy ? "启动中" : "全部启动", busy: store.startAllBusy)
+                    TrayActionLabel(title: store.startAllBusy ? "启动中" : "全部启动",
+                                    symbol: "play.fill", busy: store.startAllBusy)
                 }
-                .buttonStyle(.bordered)
-                .disabled(store.startAllBusy || store.takeoverBusy || store.hasUnsavedChanges)
+                .buttonStyle(TrayActionStyle(tint: .accentColor))
+                .disabled(store.startAllBusy || store.gatewayStartBusy || stopping || store.takeoverBusy || store.hasUnsavedChanges)
                 .help(store.hasUnsavedChanges ? "请先在主窗口保存修改" : "确认后依次启动网关、MCP 服务与隧道")
+                Button(role: .destructive) { confirmStop() } label: {
+                    TrayActionLabel(title: stopping ? "停止中" : "全部停止",
+                                    symbol: "stop.fill", busy: stopping)
+                }
+                .buttonStyle(TrayActionStyle(tint: .red))
+                .disabled(stopping || (!store.anyProcessRunning && !store.startAllBusy && !store.gatewayStartBusy) || store.takeoverBusy)
+                .help("确认后停止共享网关及全部连接")
             }
+            Button { openMainWindow() } label: {
+                Label("打开主窗口", systemImage: "macwindow").frame(maxWidth: .infinity)
+            }.buttonStyle(.bordered)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    statusSection("MCP 服务", count: store.menuServers.count) {
+                    statusSection("MCP 服务", count: store.menuServers.count, symbol: "shippingbox", expanded: $serversExpanded) {
                         if store.menuServers.isEmpty { emptySection("暂无 MCP 服务", detail: "到主窗口添加工具服务", symbol: "shippingbox") }
                         ForEach(store.menuServers, id: \.id) { server in
                             MenuStatusRow(name: server.name, status: store.menuServerStatus(server.id))
                         }
                     }
                     Divider()
-                    statusSection("隧道", count: store.menuTunnelIDs.count) {
+                    statusSection("隧道", count: store.menuTunnelIDs.count, symbol: "network", expanded: $tunnelsExpanded) {
                         if store.menuTunnelIDs.isEmpty { emptySection("暂无隧道", detail: "仅本机使用时无需创建", symbol: "network") }
                         ForEach(store.menuTunnelIDs, id: \.self) { id in
                             MenuStatusRow(name: store.menuTunnelName(id), status: store.menuTunnelStatus(id))
@@ -83,11 +94,6 @@ struct MenuBarPanel: View {
             .frame(height: statusListHeight)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 14))
 
-            Button(role: .destructive) { confirmStop() } label: {
-                Label("停止全部连接", systemImage: "stop.circle").frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.bordered)
-            .disabled((!store.anyProcessRunning && !store.startAllBusy && !store.gatewayStartBusy) || store.takeoverBusy)
             Divider()
             HStack {
                 Button { openSettings() } label: { Label("设置", systemImage: "gearshape") }
@@ -148,17 +154,29 @@ struct MenuBarPanel: View {
         }
     }
 
+    private var stopping: Bool { store.menuGatewayStatus == .stopping }
+
     private var statusListHeight: CGFloat {
-        CGFloat(min(320, 112 + 36 * (max(1, store.menuTunnelIDs.count) + max(1, store.menuServers.count))))
+        let servers = serversExpanded ? 12 + 36 * max(1, store.menuServers.count) : 0
+        let tunnels = tunnelsExpanded ? 12 + 36 * max(1, store.menuTunnelIDs.count) : 0
+        return CGFloat(min(320, 145 + servers + tunnels))
     }
 
-    private func statusSection<Content: View>(_ title: String, count: Int,
+    private func statusSection<Content: View>(_ title: String, count: Int, symbol: String,
+                                              expanded: Binding<Bool>,
                                               @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("\(title)（\(count)）").font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-                .accessibilityAddTraits(.isHeader)
+        DisclosureGroup(isExpanded: expanded) {
             content()
+        } label: {
+            HStack(spacing: 8) {
+                Label(title, systemImage: symbol).font(.subheadline.weight(.semibold))
+                Spacer(minLength: 4)
+                Text("\(count)").font(.caption.weight(.semibold)).monospacedDigit()
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(.quaternary, in: Capsule())
+            }
         }
+        .disclosureGroupStyle(FullRowDisclosureStyle())
     }
 
     private func confirmStop() {
@@ -193,5 +211,61 @@ struct MenuStatusRow: View {
         .padding(.vertical, 3)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(name)，\(status.title)")
+    }
+}
+
+/// Large, explicit actions: pending comes from runtime state, never a visual timer.
+private struct TrayActionLabel: View {
+    let title: String
+    let symbol: String
+    let busy: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        VStack(spacing: 9) {
+            Group {
+                if busy && !reduceMotion {
+                    ProgressView().controlSize(.regular)
+                } else {
+                    Image(systemName: busy ? "hourglass" : symbol)
+                        .font(.system(size: 27, weight: .semibold))
+                }
+            }.frame(width: 36, height: 36).accessibilityHidden(true)
+            Text(title).font(.system(size: 13, weight: .semibold))
+        }
+        .frame(maxWidth: .infinity, minHeight: 90)
+        .contentShape(RoundedRectangle(cornerRadius: 18))
+    }
+}
+
+private struct TrayActionStyle: ButtonStyle {
+    let tint: Color
+    @Environment(\.isEnabled) private var isEnabled
+    @Environment(\.isFocused) private var isFocused
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorSchemeContrast) private var contrast
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(isEnabled ? tint : Color.secondary)
+            .background {
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(Color(nsColor: .controlBackgroundColor))
+                    .overlay {
+                        if isEnabled && contrast != .increased {
+                            RoundedRectangle(cornerRadius: 18)
+                                .fill(LinearGradient(colors: [tint.opacity(0.2), tint.opacity(0.04)],
+                                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                        }
+                    }
+            }
+            .overlay(RoundedRectangle(cornerRadius: 18)
+                .strokeBorder(isEnabled ? tint.opacity(contrast == .increased ? 1 : 0.35) : Color.secondary.opacity(0.2)))
+            .overlay {
+                RoundedRectangle(cornerRadius: 20)
+                    .strokeBorder(isFocused ? tint : .clear, lineWidth: 2)
+                    .padding(-3).allowsHitTesting(false)
+            }
+            .shadow(color: tint.opacity(isEnabled && !configuration.isPressed ? 0.12 : 0), radius: 6, y: 3)
+            .scaleEffect(reduceMotion || !configuration.isPressed ? 1 : 0.96)
+            .animation(reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.8), value: configuration.isPressed)
     }
 }
