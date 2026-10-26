@@ -164,7 +164,7 @@ struct MenuBarPanel: View {
 
     private func statusSection<Content: View>(_ title: String, count: Int, symbol: String,
                                               expanded: Binding<Bool>,
-                                              @ViewBuilder content: () -> Content) -> some View {
+                                              @ViewBuilder content: @escaping () -> Content) -> some View {
         DisclosureGroup(isExpanded: expanded) {
             content()
         } label: {

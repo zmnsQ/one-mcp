@@ -35,7 +35,6 @@ struct HarborWindowChrome: NSViewRepresentable {
             window.titlebarAppearsTransparent = true
             window.titleVisibility = .hidden
             window.backgroundColor = HarborPalette.canvas
-            window.toolbar?.showsBaselineSeparator = false
         }
     }
     func makeNSView(context: Context) -> ChromeView { ChromeView() }
@@ -43,7 +42,6 @@ struct HarborWindowChrome: NSViewRepresentable {
         nsView.window?.titlebarAppearsTransparent = true
         nsView.window?.titleVisibility = .hidden
         nsView.window?.backgroundColor = HarborPalette.canvas
-        nsView.window?.toolbar?.showsBaselineSeparator = false
     }
 }
 

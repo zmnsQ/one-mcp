@@ -7,9 +7,10 @@ def read(n): return (R/n).read_text()
 class PearlGlass(unittest.TestCase):
     def test_continuous_native_canvas(self):
         s=read('HarborDesignSystem.swift'); h=read('HarborView.swift')
-        for t in ['titlebarAppearsTransparent = true', 'titleVisibility = .hidden', 'window.backgroundColor = HarborPalette.canvas', 'showsBaselineSeparator = false', '.darkAqua, .aqua']:
+        for t in ['titlebarAppearsTransparent = true', 'titleVisibility = .hidden', 'window.backgroundColor = HarborPalette.canvas', '.darkAqua, .aqua']:
             self.assertIn(t,s)
         self.assertNotIn('NSApp.appearance',s)
+        self.assertNotIn('showsBaselineSeparator',s)
         self.assertNotIn('styleMask',s)
         self.assertGreaterEqual(h.count('HarborCanvas()'),4)
         self.assertNotIn('Color(nsColor: .windowBackgroundColor)',h)
