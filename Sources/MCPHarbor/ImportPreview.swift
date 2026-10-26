@@ -49,7 +49,7 @@ struct ImportPreview: View {
                 Button("合并所选 \(store.selectedImportIDs.count) 项") { store.mergeSelectedCandidates() }
                     .buttonStyle(.glassProminent).disabled(store.selectedImportIDs.isEmpty || store.anyProcessRunning)
             }
-        }.padding(24).frame(width: 760, height: 700)
+        }.padding(24).frame(width: 760, height: 700).background { HarborCanvas() }
         .alert("无法导入", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("好") { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }

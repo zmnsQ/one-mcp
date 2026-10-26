@@ -102,6 +102,6 @@ struct ServiceLogView: View {
                 follow.receive(oldIDs: old.ids, newIDs: new.ids)
             }
         }
-        .padding(24).frame(minWidth: 520, idealWidth: 720, minHeight: 460, idealHeight: 560)
+        .padding(24).frame(minWidth: 520, idealWidth: 720, minHeight: 460, idealHeight: 560).background { HarborCanvas() }
     }
 }

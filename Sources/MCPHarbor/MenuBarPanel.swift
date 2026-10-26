@@ -107,7 +107,7 @@ struct MenuBarPanel: View {
         .foregroundStyle(.primary)
         .padding(16)
         .frame(width: 380)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background { HarborCanvas() }
     }
 
     private func runtimeMetric(_ title: String, value: String, symbol: String) -> some View {
@@ -215,10 +215,11 @@ struct MenuStatusRow: View {
 }
 
 /// Large, explicit actions: pending comes from runtime state, never a visual timer.
-private struct TrayActionLabel: View {
+struct TrayActionLabel: View {
     let title: String
     let symbol: String
     let busy: Bool
+    var height: CGFloat = 90
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         VStack(spacing: 9) {
@@ -232,12 +233,12 @@ private struct TrayActionLabel: View {
             }.frame(width: 36, height: 36).accessibilityHidden(true)
             Text(title).font(.system(size: 13, weight: .semibold))
         }
-        .frame(maxWidth: .infinity, minHeight: 90)
+        .frame(maxWidth: .infinity, minHeight: height)
         .contentShape(RoundedRectangle(cornerRadius: 18))
     }
 }
 
-private struct TrayActionStyle: ButtonStyle {
+struct TrayActionStyle: ButtonStyle {
     let tint: Color
     @Environment(\.isEnabled) private var isEnabled
     @Environment(\.isFocused) private var isFocused

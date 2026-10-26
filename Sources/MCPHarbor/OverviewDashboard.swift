@@ -34,16 +34,7 @@ struct OverviewDashboard: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 16)], alignment: .leading, spacing: 16) {
-                    metric("本地网关", value: store.menuGatewayStatus.title, icon: "network", color: store.menuGatewayStatus.color)
-                    metric("MCP 服务运行", value: store.menuGatewayStatus == .unknown ? "未确认" : "\(runningServices) / \(store.menuServers.count)", icon: "shippingbox.fill", color: .blue)
-                    metric("隧道运行", value: store.menuGatewayStatus == .unknown ? "未确认" : "\(activeTunnels) / \(store.menuTunnelIDs.count)", icon: "point.3.connected.trianglepath.dotted", color: .teal)
-                    metric("异常", value: failures == 0 && hasUnknownStates ? "待确认" : String(failures), icon: "exclamationmark.triangle.fill", color: failures > 0 ? .red : .secondary)
-                }
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) { dashboardActions }
-                    VStack(alignment: .leading, spacing: 12) { dashboardActions }
-                }
+                workspaceHero
                 /* Primary actions use the same order at narrow widths. */
                 if !store.gatewayReady {
                     HStack(alignment: .top, spacing: 12) {
@@ -96,18 +87,58 @@ struct OverviewDashboard: View {
         Button("管理隧道", systemImage: "network", action: onOpenTunnels)
         Button("查看诊断", systemImage: "waveform.path.ecg", action: onOpenLogs)
     }
+    private var heroTitle: String {
+        if failures > 0 { return "有连接需要处理" }
+        if hasUnknownStates { return "连接状态待确认" }
+        if store.gatewayReady { return "本地网关已就绪" }
+        if store.menuGatewayStatus == .starting || store.menuGatewayStatus == .checking { return "正在准备连接" }
+        if store.menuGatewayStatus == .stopping { return "正在停止连接" }
+        return "准备连接你的工具"
+    }
+    private var heroDetail: String {
+        if failures > 0 { return "先查看异常项目和诊断，再决定是否重新启动。" }
+        if hasUnknownStates { return "尚不能确认全部连接状态；下方仅展示已观察到的运行信息。" }
+        if store.gatewayReady { return "管理本机工具与隧道，按需启动、明确授权。远端调用需单独验证。" }
+        return "先添加工具，再从左侧启动网关与需要的连接。"
+    }
+    private var workspaceHero: some View {
+        VStack(alignment: .leading, spacing: 22) {
+            HStack(alignment: .center, spacing: 24) {
+                VStack(alignment: .leading, spacing: 10) {
+                    Label("你的连接工作台", systemImage: "sparkle")
+                        .font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+                    Text(heroTitle).font(.system(size: 30, weight: .bold, design: .rounded))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(heroDetail).font(.callout).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                BrandMark().frame(width: 92, height: 92).accessibilityHidden(true)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 24)], alignment: .leading, spacing: 18) {
+                metric("本地网关", value: store.menuGatewayStatus.title, icon: "network", color: store.menuGatewayStatus.color)
+                metric("MCP 服务运行", value: store.menuGatewayStatus == .unknown ? "未确认" : "\(runningServices) / \(store.menuServers.count)", icon: "shippingbox.fill", color: .blue)
+                metric("隧道运行", value: store.menuGatewayStatus == .unknown ? "未确认" : "\(activeTunnels) / \(store.menuTunnelIDs.count)", icon: "point.3.connected.trianglepath.dotted", color: .teal)
+                metric("异常", value: failures == 0 && hasUnknownStates ? "待确认" : String(failures), icon: "exclamationmark.triangle.fill", color: failures > 0 ? .red : .secondary)
+            }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) { dashboardActions }
+                VStack(alignment: .leading, spacing: 12) { dashboardActions }
+            }
+        }
+        .padding(6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .harborSurface()
+    }
     private func metric(_ title: String, value: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Image(systemName: icon).font(.title3.weight(.medium)).foregroundStyle(color)
-                .frame(width: 36, height: 36)
-                .background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 11))
-                .accessibilityHidden(true)
-            Text(value).font(.system(size: 28, weight: .semibold, design: .rounded)).monospacedDigit()
+        VStack(alignment: .leading, spacing: 6) {
+            Label(title, systemImage: icon).font(.caption).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 23, weight: .semibold, design: .rounded)).monospacedDigit()
+                .foregroundStyle(color)
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .contentTransition(.numericText())
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: value)
-            Text(title).font(.caption).foregroundStyle(.secondary)
-        }.frame(maxWidth: .infinity, alignment: .leading).harborSurface()
+        }.frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
     private func onboardingStep(_ number: String, title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
@@ -121,18 +152,25 @@ struct OverviewDashboard: View {
         let bindings = store.preferences.effectiveTunnelRecords.filter { $0.serverIDs.contains(server.id) }.count
         return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top) {
-                Image(systemName: "shippingbox.fill").foregroundStyle(.blue).font(.title3)
-                    .frame(width: 42, height: 42)
-                    .background(Color.blue.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                Image(systemName: "shippingbox.fill").foregroundStyle(.blue).font(.system(size: 25, weight: .medium))
+                    .frame(width: 52, height: 52)
+                    .background(LinearGradient(colors: [Color.blue.opacity(0.16), Color.cyan.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(server.name).font(.headline).lineLimit(2).help(server.name)
-                        .frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
-                    Text("已配置 \(server.allowedTools.count) 项授权工具 · \(bindings) 条隧道绑定").font(.caption).foregroundStyle(.secondary)
+                    Text(server.name).font(.system(size: 17, weight: .semibold)).lineLimit(2).help(server.name)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Text("MCP 工具服务 · 按授权开放").font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 4)
             }
-            StatusBadge(status: status)
+            HStack(spacing: 10) {
+                StatusBadge(status: status)
+                Spacer(minLength: 0)
+                Label("\(bindings) 条绑定", systemImage: "link")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text("已配置 \(server.allowedTools.count) 项授权工具")
+                .font(.caption).foregroundStyle(.secondary)
             if !store.serverRestartReasons(server.id).isEmpty {
                 Label("配置已变更，待重启生效", systemImage: "arrow.clockwise").font(.caption).foregroundStyle(.orange)
             }
@@ -142,7 +180,6 @@ struct OverviewDashboard: View {
             } else if !store.gatewayReady && !busy {
                 Text("先启动左侧本地网关，再启动服务").font(.caption).foregroundStyle(.secondary)
             }
-            Divider()
             HStack(spacing: 8) {
                 Button("详情") { onSelectService(server.id) }
                 Button("日志", systemImage: "text.alignleft") { logServer = server }

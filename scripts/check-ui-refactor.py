@@ -7,7 +7,7 @@ def read(name): return (ROOT / name).read_text()
 class RefactorContracts(unittest.TestCase):
     def test_shared_native_surface_and_accessibility(self):
         source = read('HarborDesignSystem.swift')
-        for token in ['controlBackgroundColor', 'colorSchemeContrast', 'accessibilityReduceMotion', '.onHover', 'isEnabled', 'configuration.isPressed']:
+        for token in ['HarborPalette.canvas', 'colorSchemeContrast', 'accessibilityReduceMotion', '.onHover', 'isEnabled', 'configuration.isPressed']:
             self.assertIn(token, source)
         self.assertNotIn('repeatForever', source)
         for name in ['OverviewDashboard.swift', 'TunnelRecordsView.swift', 'FullRowDisclosureStyle.swift']:

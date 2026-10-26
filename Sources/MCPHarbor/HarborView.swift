@@ -105,7 +105,6 @@ struct HarborView: View {
                         }.frame(maxHeight: 160)
                     }.padding(12).background(Color.orange.opacity(0.06))
                 }
-                Divider()
                 Group {
                 switch section {
                 case .dashboard:
@@ -122,8 +121,9 @@ struct HarborView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.20), value: section)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background { HarborCanvas() }
         }
+        .background { HarborWindowChrome().frame(width: 0, height: 0) }
         .frame(minWidth: 1020, minHeight: 700)
 
         .sheet(item: $serviceLogServer) { server in ServiceLogView(server: server).environmentObject(store) }
@@ -134,7 +134,7 @@ struct HarborView: View {
                 Text("工作空间名称").font(.subheadline.weight(.medium))
                 TextField("名称", text: $workspaceName).textFieldStyle(.roundedBorder)
                 HStack { Button("取消") { showWorkspaceSheet = false }; Spacer(); Button("创建") { if store.createWorkspace(name: workspaceName) { workspaceName = ""; showWorkspaceSheet = false } }.buttonStyle(.glassProminent).disabled(workspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-            }.padding(24).frame(width: 520).background(.regularMaterial)
+            }.padding(24).frame(width: 520).background { HarborCanvas() }
         }
         .sheet(isPresented: $store.showImportPreview, onDismiss: { store.cancelImportPreview() }) { ImportPreview().environmentObject(store) }
         .sheet(isPresented: $showConfirmation, onDismiss: { pendingAction = nil }) {
@@ -180,7 +180,7 @@ struct HarborView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack { Spacer(); Button("取消", role: .cancel) { showAddMCP = false } }
-            }.padding(24).frame(width: 560).background(.regularMaterial)
+            }.padding(24).frame(width: 560).background { HarborCanvas() }
         }
         .onReceive(navigationRouter.$destination) { destination in
             guard let destination, let requested = Section(rawValue: destination) else { return }
@@ -250,7 +250,7 @@ struct HarborView: View {
                 }.frame(maxHeight: 300)
             }
             .background {
-                LinearGradient(colors: [Color.accentColor.opacity(0.055), Color(nsColor: .windowBackgroundColor).opacity(0.6)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                HarborCanvas()
             }
             .navigationSplitViewColumnWidth(min: 260, ideal: 280, max: 320)
     }
@@ -265,7 +265,7 @@ struct HarborView: View {
                 .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(section.title).font(.title2.bold())
+                Text(section == .dashboard ? "工作台" : section.title).font(.system(size: 28, weight: .bold))
                 Text(section.subtitle).font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -275,10 +275,7 @@ struct HarborView: View {
 
         }.padding(.horizontal, 24).padding(.vertical, 22)
             .fixedSize(horizontal: false, vertical: true)
-            .background {
-                LinearGradient(colors: [Color.accentColor.opacity(0.07), Color(nsColor: .windowBackgroundColor)], startPoint: .topLeading, endPoint: .bottomTrailing)
-                    .allowsHitTesting(false)
-            }
+
     }
     private func approve(_ message: String, action: @escaping () -> Void) {
         let workspace = store.currentWorkspaceID
@@ -423,9 +420,9 @@ struct HarborView: View {
                                 }
                             }.padding(.vertical, 6).tag(server.id)
                         }
-                    }.listStyle(.inset)
+                    }.listStyle(.inset).scrollContentBackground(.hidden)
                     }.frame(minWidth: 200, idealWidth: 220, maxWidth: 250)
-                        .background(.thinMaterial)
+                        .background(Color.blue.opacity(0.025))
                     Divider()
                     if let index = selectedIndex {
                         VStack(spacing: 0) {

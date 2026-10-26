@@ -63,6 +63,6 @@ private struct AIManagementSheet: View {
                 Spacer()
                 HStack { Spacer(); Button("关闭") { dismiss() }.keyboardShortcut(.cancelAction) }
             }
-        }.padding(24).frame(width: 720, height: 660)
+        }.padding(24).frame(width: 720, height: 660).background { HarborCanvas() }
     }
 }

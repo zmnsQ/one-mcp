@@ -63,8 +63,7 @@ struct TunnelRecordsView: View {
                 Text(collectionSummary).font(.caption).monospacedDigit()
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
-            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+            }.frame(maxWidth: .infinity, alignment: .leading).harborSurface()
             if store.preferences.effectiveTunnelRecords.isEmpty {
                 ContentUnavailableView {
                     Label("建立第一个连接入口", systemImage: "point.3.connected.trianglepath.dotted")
@@ -109,19 +108,22 @@ struct TunnelRecordsView: View {
         let pending = store.hasPendingCommand(for: record.id)
         let busy = pending || store.startAllBusy || [.starting, .stopping, .checking].contains(status)
         let feedback = actionFeedback(record, status: status, pending: pending)
+        let tint: Color = record.transport == "openai" ? .blue : .indigo
         return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: record.transport == "openai" ? "point.3.connected.trianglepath.dotted" : "cloud.fill")
-                    .font(.title3).foregroundStyle(record.transport == "openai" ? Color.teal : Color.orange)
-                    .frame(width: 42, height: 42)
-                    .background((record.transport == "openai" ? Color.teal : Color.orange).opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+                    .font(.system(size: 22, weight: .medium)).foregroundStyle(tint)
+                    .frame(width: 48, height: 48)
+                    .background(LinearGradient(colors: [tint.opacity(0.16), tint.opacity(0.035)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(tint.opacity(0.10)))
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
                     Text(record.name).font(.headline).lineLimit(2).fixedSize(horizontal: false, vertical: true).help(record.name)
                     Text(record.transport == "openai" ? "OpenAI · 私有隧道" : "Cloudflare · 公网入口")
                         .font(.caption2.weight(.medium))
-                        .foregroundStyle(record.transport == "openai" ? Color.teal : Color.orange)
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background((record.transport == "openai" ? Color.teal : Color.orange).opacity(0.08), in: Capsule())
+                        .foregroundStyle(tint)
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .background(tint.opacity(0.07), in: Capsule())
                 }
                 Spacer(minLength: 0)
             }
@@ -130,6 +132,7 @@ struct TunnelRecordsView: View {
                 Spacer()
                 Text("\(record.serverIDs.count) 个 MCP").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
+            connectionRoute(record, tint: tint)
             VStack(alignment: .leading, spacing: 6) {
                 Text("此入口连接的工具服务").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                 Text(TunnelRecordPresentation.bindingSummary(record, servers: store.preferences.servers))
@@ -144,7 +147,7 @@ struct TunnelRecordsView: View {
                     .font(.caption).foregroundStyle(status == .failed ? Color.orange : Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Divider()
+            Rectangle().fill(Color.blue.opacity(0.08)).frame(height: 1).accessibilityHidden(true)
             HStack(spacing: 8) {
                 Button("详情", systemImage: "info.circle") {
                     inspecting = TunnelDetailSession(id: record.id, workspace: store.currentWorkspaceID)
@@ -157,6 +160,7 @@ struct TunnelRecordsView: View {
                     Button { store.stopTunnel(record.id) } label: {
                         RuntimeActionLabel(title: "停止", busy: busy)
                     }
+                    .buttonStyle(.bordered).tint(.red)
                     .disabled(busy || status == .unknown)
                     .accessibilityLabel("停止隧道“\(record.name)”")
                     .help(feedback ?? "停止后，使用此入口的客户端会断开")
@@ -176,6 +180,37 @@ struct TunnelRecordsView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .harborSurface()
+    }
+
+    /// A diagram of configured bindings, not a claim of successful remote traffic.
+    private func connectionRoute(_ record: TunnelRecord, tint: Color) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("配置连接路径").font(.caption2.weight(.medium)).foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                routeNode("\(record.serverIDs.count) 个 MCP", symbol: "server.rack", tint: tint)
+                routeConnector(tint)
+                routeNode("授权边界", symbol: "lock.shield", tint: tint)
+                routeConnector(tint)
+                routeNode(record.transport == "openai" ? "工作区" : "公网入口", symbol: record.transport == "openai" ? "building.2" : "globe", tint: tint)
+            }
+        }
+        .padding(12)
+        .background(tint.opacity(0.035), in: RoundedRectangle(cornerRadius: 14))
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("配置连接路径：\(record.serverIDs.count) 个 MCP，通过授权边界连接\(record.transport == "openai" ? "OpenAI 工作区" : "Cloudflare 公网入口")。不代表远端调用已验证。")
+    }
+    private func routeNode(_ title: String, symbol: String, tint: Color) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: symbol).font(.system(size: 17, weight: .medium))
+                .foregroundStyle(tint).frame(width: 34, height: 34)
+                .background(.thinMaterial, in: Circle())
+            Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                .lineLimit(2).multilineTextAlignment(.center)
+        }.frame(maxWidth: .infinity)
+    }
+    private func routeConnector(_ tint: Color) -> some View {
+        Image(systemName: "arrow.right").font(.system(size: 10, weight: .medium))
+            .foregroundStyle(tint.opacity(0.55)).padding(.bottom, 18)
     }
 
     /// Explain the current runtime observation without inventing progress or retrying commands.
@@ -202,11 +237,11 @@ private struct TunnelRecordDetails: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                HarborSheetHeader(title: record?.name ?? "隧道详情", subtitle: "只读详情 · 不会启动隧道或修改配置", symbol: "network", tint: .teal)
+                HarborSheetHeader(title: record?.name ?? "隧道详情", subtitle: "只读详情 · 不会启动隧道或修改配置", symbol: "network", tint: .blue)
                 Spacer(minLength: 12)
                 Button("完成") { dismiss() }.keyboardShortcut(.cancelAction)
                     .buttonStyle(.bordered)
-            }.padding(20).background(.thinMaterial)
+            }.padding(20)
             Divider()
             ScrollView {
                 if let record {
@@ -270,14 +305,14 @@ private struct TunnelRecordDetails: View {
                 Spacer()
             }.padding(.horizontal, 20).padding(.vertical, 14).background(.thinMaterial)
         }.frame(width: 620, height: 660)
-            .background(Color(nsColor: .windowBackgroundColor))
+            .background { HarborCanvas() }
     }
     private func detailSection<Content: View>(_ title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 Image(systemName: icon).font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(.teal).frame(width: 30, height: 30)
-                    .background(Color.teal.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+                    .foregroundStyle(.blue).frame(width: 30, height: 30)
+                    .background(Color.blue.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
                     .accessibilityHidden(true)
                 Text(title).font(.headline)
             }
@@ -390,8 +425,8 @@ private struct TunnelRecordEditor: View {
         VStack(spacing: 0) {
             HarborSheetHeader(title: session.isNew ? "添加隧道" : "编辑隧道",
                               subtitle: "账号与凭据 → 隧道配置 → 创建并保存。启动仍需单独确认。",
-                              symbol: session.isNew ? "point.3.connected.trianglepath.dotted" : "slider.horizontal.3", tint: .teal)
-                .padding(20).background(.thinMaterial)
+                              symbol: session.isNew ? "point.3.connected.trianglepath.dotted" : "slider.horizontal.3", tint: .blue)
+                .padding(20)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
@@ -441,7 +476,7 @@ private struct TunnelRecordEditor: View {
                     .disabled(!completed && (busy || contextChanged || record.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || record.serverIDs.isEmpty || (wantsCreation && !store.gatewayReady)))
             }.padding(20).background(.thinMaterial)
         }.frame(width: 660, height: 720).textFieldStyle(.roundedBorder)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background { HarborCanvas() }
         .interactiveDismissDisabled(unsaved || busy)
         .alert("确认隧道操作", isPresented: $showConfirmation) {
             Button("取消", role: .cancel) { pendingAction = nil }

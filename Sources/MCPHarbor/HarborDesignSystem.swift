@@ -1,8 +1,55 @@
 import SwiftUI
+import AppKit
 
-/// Native semantic colors and restrained depth, not the reference app's brand.
-/// Hover changes light/shadow, not card position, so surrounding content stays still.
+/// One continuous canvas shared by titlebar, navigation and content. No forced appearance.
+enum HarborPalette {
+    static let selection = Color(red: 0.06, green: 0.30, blue: 0.72)
+    static let canvas = NSColor(name: "HarborCanvas") { appearance in
+        appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+            ? NSColor(srgbRed: 0.085, green: 0.115, blue: 0.17, alpha: 1)
+            : NSColor(srgbRed: 0.935, green: 0.96, blue: 0.995, alpha: 1)
+    }
+}
+
+struct HarborCanvas: View {
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    var body: some View {
+        Color(nsColor: HarborPalette.canvas)
+            .overlay {
+                if contrast != .increased {
+                    LinearGradient(colors: [.clear, Color.blue.opacity(scheme == .dark ? 0.045 : 0.035)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+            }
+            .allowsHitTesting(false)
+    }
+}
+
+/// Style only the host window; no service, permission or system-appearance changes.
+struct HarborWindowChrome: NSViewRepresentable {
+    final class ChromeView: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window else { return }
+            window.titlebarAppearsTransparent = true
+            window.titleVisibility = .hidden
+            window.backgroundColor = HarborPalette.canvas
+            window.toolbar?.showsBaselineSeparator = false
+        }
+    }
+    func makeNSView(context: Context) -> ChromeView { ChromeView() }
+    func updateNSView(_ nsView: ChromeView, context: Context) {
+        nsView.window?.titlebarAppearsTransparent = true
+        nsView.window?.titleVisibility = .hidden
+        nsView.window?.backgroundColor = HarborPalette.canvas
+        nsView.window?.toolbar?.showsBaselineSeparator = false
+    }
+}
+
+/// Pearl-glass surfaces: blue-tinted depth without repeated dark outlined boxes.
 private struct HarborSurface: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
@@ -10,20 +57,20 @@ private struct HarborSurface: ViewModifier {
         content
             .padding(18)
             .background {
-                RoundedRectangle(cornerRadius: 18)
-                    .fill(Color(nsColor: .controlBackgroundColor))
+                RoundedRectangle(cornerRadius: 22)
+                    .fill(scheme == .dark ? Color.white.opacity(0.065) : Color.white.opacity(0.82))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 18)
-                            .fill(LinearGradient(colors: [Color.accentColor.opacity(hovered ? 0.07 : 0.025), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        RoundedRectangle(cornerRadius: 22)
+                            .fill(LinearGradient(colors: [Color.blue.opacity(hovered ? 0.07 : 0.025), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
                             .allowsHitTesting(false)
                     }
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 18)
-                    .strokeBorder(contrast == .increased ? Color.primary : Color(nsColor: .separatorColor).opacity(hovered ? 0.9 : 0.5), lineWidth: contrast == .increased ? 2 : 1)
+                RoundedRectangle(cornerRadius: 22)
+                    .strokeBorder(contrast == .increased ? Color.primary : Color.white.opacity(scheme == .dark ? 0.11 : 0.92), lineWidth: contrast == .increased ? 2 : 1)
                     .allowsHitTesting(false)
             }
-            .shadow(color: Color.black.opacity(hovered ? 0.08 : 0.025), radius: hovered ? 14 : 5, y: hovered ? 5 : 2)
+            .shadow(color: Color.blue.opacity(scheme == .dark ? 0.025 : (hovered ? 0.10 : 0.045)), radius: hovered ? 18 : 10, y: hovered ? 6 : 3)
             .onHover { hovered = $0 }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: hovered)
     }

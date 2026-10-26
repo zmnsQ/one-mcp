@@ -46,7 +46,7 @@ struct HarborConfirmationSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HarborSheetHeader(title: "确认这次操作", subtitle: "核对影响范围后，再决定是否继续。", symbol: "hand.raised.fill", tint: .orange)
-                .padding(24).background(.thinMaterial)
+                .padding(24)
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
                     HarborNotice(title: "操作影响", detail: message, symbol: "exclamationmark.shield", tint: .orange)
@@ -59,8 +59,8 @@ struct HarborConfirmationSheet: View {
                 Button("取消", role: .cancel, action: onCancel).keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("确认并继续", action: onContinue).buttonStyle(.borderedProminent).tint(.orange)
-            }.padding(20).background(.bar)
-        }.frame(width: 560).fixedSize(horizontal: false, vertical: true)
+            }.padding(20)
+        }.frame(width: 560).fixedSize(horizontal: false, vertical: true).background { HarborCanvas() }
     }
 }
 
@@ -78,25 +78,31 @@ struct HarborNavigationRow: View {
         Button(action: action) {
             HStack(spacing: 12) {
                 Image(systemName: symbol).font(.system(size: 18, weight: selected ? .semibold : .regular))
-                    .foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(selected ? Color.white : Color.accentColor)
                     .frame(width: 36, height: 36)
-                    .background(selected ? Color.accentColor.opacity(0.13) : Color.clear, in: RoundedRectangle(cornerRadius: 11))
+                    .background(selected ? Color.white.opacity(0.16) : Color.clear, in: RoundedRectangle(cornerRadius: 11))
                     .offset(x: selected && !reduceMotion ? 2 : 0)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title).font(.system(size: 14, weight: selected ? .semibold : .medium))
-                    if selected { Text(subtitle).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1) }
+                    // The full description stays in the accessibility hint; navigation stays scannable.
                 }
                 Spacer(minLength: 0)
-                if selected { Capsule().fill(Color.accentColor).frame(width: 3, height: 22) }
-            }.foregroundStyle(.primary)
+                if selected { Capsule().fill(Color.white.opacity(0.8)).frame(width: 3, height: 22) }
+            }.foregroundStyle(selected ? Color.white : Color.primary)
                 .padding(.horizontal, 10).padding(.vertical, 8)
                 .frame(maxWidth: .infinity, minHeight: 54, alignment: .leading)
                 .background {
-                    RoundedRectangle(cornerRadius: 15).fill(selected ? Color(nsColor: .controlBackgroundColor) : Color.primary.opacity(hovered ? 0.035 : 0))
+                    RoundedRectangle(cornerRadius: 15)
+                        .fill(selected ? HarborPalette.selection : Color.primary.opacity(hovered ? 0.035 : 0))
+                        .overlay {
+                            if selected && contrast != .increased {
+                                RoundedRectangle(cornerRadius: 15).fill(LinearGradient(colors: [.white.opacity(0.08), .clear], startPoint: .topTrailing, endPoint: .bottomLeading))
+                            }
+                        }
                 }
                 .overlay(RoundedRectangle(cornerRadius: 15).strokeBorder(focused ? Color.accentColor : (selected && contrast == .increased ? Color.primary : Color.clear), lineWidth: 2))
-                .shadow(color: .black.opacity(selected ? 0.06 : 0), radius: 8, y: 3)
+                .shadow(color: .blue.opacity(selected ? 0.20 : 0), radius: 8, y: 3)
                 .contentShape(RoundedRectangle(cornerRadius: 15))
         }.buttonStyle(.plain).focused($focused)
             .onHover { hovered = $0 }

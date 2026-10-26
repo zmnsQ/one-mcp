@@ -21,7 +21,7 @@ class UIContractTests(unittest.TestCase):
         app = read('MCPHarborApp.swift')
         self.assertIn('.menuBarExtraStyle(.window)', app)
         self.assertIn('MenuBarPanel().environmentObject(store)', app)
-        row = read('MenuBarPanel.swift').split('struct MenuStatusRow: View')[1].split('private struct TrayActionLabel: View')[0]
+        row = read('MenuBarPanel.swift').split('struct MenuStatusRow: View')[1].split('struct TrayActionLabel: View')[0]
         self.assertNotIn('.disabled(', row)
         self.assertNotIn('Button', row)
         self.assertIn('.foregroundStyle(.primary)', row)

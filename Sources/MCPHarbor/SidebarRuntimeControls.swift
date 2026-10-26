@@ -74,9 +74,7 @@ struct SidebarRuntimeControls: View {
             Divider().padding(.vertical, 2)
             SidebarActivityView(confirm: confirm)
         }
-        .padding(14)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
-        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color(nsColor: .separatorColor).opacity(0.35)))
+        .harborSurface()
         .padding(.horizontal, 12).padding(.bottom, 14)
         .sheet(isPresented: $showDetails) {
             RuntimeStatusDetails().environmentObject(store)
@@ -90,10 +88,9 @@ struct SidebarRuntimeControls: View {
                 store.startAll(expectedPlan: plan, expectedWorkspace: workspace, expectedRevision: revision)
             }
         } label: {
-            Label(store.startAllBusy ? "启动中" : "全部启动", systemImage: "play.fill")
-                .fixedSize(horizontal: true, vertical: false)
+            TrayActionLabel(title: store.startAllBusy ? "启动中" : "全部启动", symbol: "play.fill", busy: store.startAllBusy, height: 70)
         }
-        .buttonStyle(.borderedProminent)
+        .buttonStyle(TrayActionStyle(tint: .blue))
         .disabled(store.startAllBusy || store.takeoverBusy || store.hasUnsavedChanges)
         .help(store.hasUnsavedChanges ? "请先保存修改，再全部启动" : "依次启动网关、参与的 MCP 和隧道")
     }
@@ -102,10 +99,10 @@ struct SidebarRuntimeControls: View {
         Button {
             confirm("停止共享网关及全部连接？所有连接到此实例的 AI 和应用都会受到影响。将取消后续启动并请求停止当前进程；配置会保留。") { store.shutdown() }
         } label: {
-            Label("全部停止", systemImage: "stop.fill").fixedSize(horizontal: true, vertical: false)
+            TrayActionLabel(title: store.menuGatewayStatus == .stopping ? "停止中" : "全部停止", symbol: "stop.fill", busy: store.menuGatewayStatus == .stopping, height: 70)
         }
-        .buttonStyle(.bordered)
-        .disabled((!store.anyProcessRunning && !store.startAllBusy && !store.gatewayStartBusy) || store.takeoverBusy)
+        .buttonStyle(TrayActionStyle(tint: .red))
+        .disabled(store.menuGatewayStatus == .stopping || (!store.anyProcessRunning && !store.startAllBusy && !store.gatewayStartBusy) || store.takeoverBusy)
     }
 
 }

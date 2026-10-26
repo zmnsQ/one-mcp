@@ -63,7 +63,7 @@ class PresentationArchitecture(unittest.TestCase):
         for t in ['serversExpanded = false', 'tunnelsExpanded = false',
                   'DisclosureGroup(isExpanded: expanded)', 'FullRowDisclosureStyle()',
                   'serversExpanded ? 12', 'tunnelsExpanded ? 12',
-                  'minHeight: 90', 'TrayActionStyle(tint: .red)',
+                  'var height: CGFloat = 90', 'TrayActionStyle(tint: .red)',
                   'store.menuGatewayStatus == .stopping', '.disabled(stopping ||',
                   'store.gatewayStartBusy || stopping', 'accessibilityReduceMotion']:
             self.assertIn(t,s)
