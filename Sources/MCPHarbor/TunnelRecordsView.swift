@@ -77,6 +77,9 @@ struct TunnelRecordsView: View {
     }
     private func tunnelCard(_ record: TunnelRecord) -> some View {
         let status = store.menuTunnelStatus(record.id)
+        let pending = store.hasPendingCommand(for: record.id)
+        let busy = pending || store.startAllBusy || [.starting, .stopping, .checking].contains(status)
+        let feedback = actionFeedback(record, status: status, pending: pending)
         return VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: record.transport == "openai" ? "point.3.connected.trianglepath.dotted" : "cloud.fill")
@@ -84,7 +87,7 @@ struct TunnelRecordsView: View {
                     .frame(width: 42, height: 42)
                     .background((record.transport == "openai" ? Color.teal : Color.orange).opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(record.name).font(.headline).lineLimit(1).help(record.name)
+                    Text(record.name).font(.headline).lineLimit(2).fixedSize(horizontal: false, vertical: true).help(record.name)
                     Text(record.transport == "openai" ? "OpenAI · 私有隧道" : "Cloudflare · 公网入口")
                         .font(.caption2.weight(.medium))
                         .foregroundStyle(record.transport == "openai" ? Color.teal : Color.orange)
@@ -104,29 +107,55 @@ struct TunnelRecordsView: View {
                     .font(.callout).lineLimit(2).frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
                     .help(TunnelRecordPresentation.bindingSummary(record, servers: store.preferences.servers))
             }
+            if let feedback {
+                Label(feedback, systemImage: status == .failed ? "exclamationmark.triangle" : "info.circle")
+                    .font(.caption).foregroundStyle(status == .failed ? Color.orange : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Divider()
             HStack(spacing: 8) {
                 Button("详情", systemImage: "info.circle") {
                     inspecting = TunnelDetailSession(id: record.id, workspace: store.currentWorkspaceID)
                 }
+                .accessibilityLabel("查看“\(record.name)”的隧道详情")
                 Button("编辑", systemImage: "slider.horizontal.3") { edit(record) }
+                    .accessibilityLabel("编辑隧道“\(record.name)”")
                 Spacer(minLength: 0)
                 if store.tunnelRunning(record.id) {
-                    Button("停止", systemImage: "stop.fill") { store.stopTunnel(record.id) }
-                        .disabled(store.hasPendingCommand(for: record.id))
+                    Button { store.stopTunnel(record.id) } label: {
+                        RuntimeActionLabel(title: "停止", busy: busy)
+                    }
+                    .disabled(busy || status == .unknown)
+                    .accessibilityLabel("停止隧道“\(record.name)”")
+                    .help(feedback ?? "停止后，使用此入口的客户端会断开")
                 } else {
-                    Button("启动", systemImage: "play.fill") {
+                    Button {
                         startRecord = record; startPlan = store.preferences; startWorkspace = store.currentWorkspaceID
                         startRevision = store.savedRevision; showStart = true
+                    } label: {
+                        RuntimeActionLabel(title: "启动", busy: busy)
                     }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(store.startAllBusy || !store.gatewayReady || store.hasPendingCommand(for: record.id) || record.serverIDs.isEmpty)
+                    .buttonStyle(HarborPrimaryButtonStyle())
+                    .disabled(busy || !store.gatewayReady || status == .unknown || record.serverIDs.isEmpty)
+                    .accessibilityLabel("启动隧道“\(record.name)”")
+                    .help(feedback ?? "核对绑定服务与公开范围后启动")
                 }
-            }.controlSize(.small)
+            }.controlSize(.small).fixedSize(horizontal: false, vertical: true)
         }
-        .padding(18)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 16))
-        .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.08)))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .harborSurface()
+    }
+
+    /// Explain the current runtime observation without inventing progress or retrying commands.
+    private func actionFeedback(_ record: TunnelRecord, status: MenuBarStatus, pending: Bool) -> String? {
+        if pending { return "操作已提交，等待网关确认。" }
+        if store.startAllBusy { return "正在执行全部启动，请等待结果。" }
+        if status == .unknown { return "状态尚未确认；请先连接网关，再核对是否已运行。" }
+        if [.starting, .stopping, .checking].contains(status) { return "\(status.title)，请等待运行状态更新。" }
+        if !store.gatewayReady { return "先启动左侧本机网关，再启动隧道。" }
+        if record.serverIDs.isEmpty { return "尚未绑定 MCP 服务；请在编辑中选择。" }
+        if status == .failed { return "上次运行出现错误，请打开详情查看诊断后再试。" }
+        return nil
     }
 }
 
@@ -359,7 +388,7 @@ private struct TunnelRecordEditor: View {
                 Button(savedDraft == nil ? "取消" : busy ? "关闭（创建继续）" : "关闭（配置已保留）", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Button(primaryTitle) { save() }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .buttonStyle(HarborPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
                     .disabled(!completed && (busy || contextChanged || record.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || record.serverIDs.isEmpty || (wantsCreation && !store.gatewayReady)))
             }.padding(20)
         }.frame(width: 660, height: 720).textFieldStyle(.roundedBorder)

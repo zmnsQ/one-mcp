@@ -44,6 +44,9 @@ struct StatusBadge: View {
             .font(.caption.weight(.semibold)).foregroundStyle(status.color)
             .padding(.horizontal, 9).padding(.vertical, 5)
             .background(status.color.opacity(0.10), in: Capsule())
+            .fixedSize()
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("状态：\(status.title)")
     }
 }
 

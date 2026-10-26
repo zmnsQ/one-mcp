@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HarborView: View {
     @EnvironmentObject private var store: HarborStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirmation = ""
     @State private var pendingAction: (() -> Void)?
     @State private var showConfirmation = false
@@ -22,6 +23,14 @@ struct HarborView: View {
             case .servers: "shippingbox"
             case .tunnels: "network"
             case .settings: "gearshape"
+            }
+        }
+        var shortcut: KeyEquivalent {
+            switch self {
+            case .dashboard: "1"
+            case .servers: "2"
+            case .tunnels: "3"
+            case .settings: "4"
             }
         }
         var subtitle: String {
@@ -54,11 +63,12 @@ struct HarborView: View {
                     Picker("工作空间", selection: Binding(get: { store.currentWorkspaceID }, set: { store.switchWorkspace($0) })) {
                         ForEach(store.workspaces) { Text($0.name).tag($0.id) }
                     }.labelsHidden().disabled(store.anyProcessRunning)
-                    Button { showWorkspaceSheet = true } label: { Image(systemName: "folder.badge.plus") }.help("新建工作空间").disabled(store.anyProcessRunning)
+                    Button { showWorkspaceSheet = true } label: { Image(systemName: "folder.badge.plus") }.help("新建工作空间").accessibilityLabel("新建工作空间").disabled(store.anyProcessRunning)
                 }.padding(.horizontal)
                 List(selection: Binding<Section?>(get: { section }, set: { if let value = $0 { section = value } })) {
                     ForEach(Section.allCases) { item in
                         Label(item.title, systemImage: item.icon).tag(item)
+                            .accessibilityHint(item.subtitle)
                     }
                 }.listStyle(.sidebar)
                 SidebarRuntimeControls(confirm: { message, action in approve(message, action: action) })
@@ -111,6 +121,7 @@ struct HarborView: View {
                     }.padding(12).background(Color.orange.opacity(0.06))
                 }
                 Divider()
+                Group {
                 switch section {
                 case .dashboard:
                     OverviewDashboard(onAddService: { showAddMCP = true }, onSelectService: { id in store.selectedID = id; section = .servers }, onOpenTunnels: { section = .tunnels }, onOpenSettings: { section = .settings }, onOpenLogs: { section = .settings; showDiagnostics = true; showLogs = true }, confirm: { message, action in approve(message, action: action) })
@@ -118,9 +129,14 @@ struct HarborView: View {
                 case .tunnels: tunnelSettings
                 case .settings: connectionSettings
                 }
+                }
+                .id(section)
+                .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 8)))
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.20), value: section)
 
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.20), value: section)
             .background(Color(nsColor: .windowBackgroundColor))
         }
         .frame(minWidth: 1020, minHeight: 700)
@@ -140,7 +156,7 @@ struct HarborView: View {
             Button("继续") { let action = pendingAction; pendingAction = nil; action?() }
         } message: { Text(confirmation) }
         .alert("请留意", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
-            Button("OK") { store.errorMessage = nil }
+            Button("知道了") { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
         .sheet(isPresented: $showAddMCP, onDismiss: {
             if importAfterAddDismiss {
@@ -183,6 +199,15 @@ struct HarborView: View {
         }
         .task(id: store.currentWorkspaceID) { store.autofillRememberedTunnelKey() }
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Menu {
+                    ForEach(Section.allCases) { item in
+                        Button { section = item } label: { Label(item.title, systemImage: item.icon) }
+                            .keyboardShortcut(item.shortcut, modifiers: .command)
+                    }
+                } label: { Label("前往", systemImage: "rectangle.split.2x1") }
+                .help("切换页面：⌘1 总览 · ⌘2 服务 · ⌘3 隧道 · ⌘4 设置")
+            }
             if store.hasUnsavedChanges {
                 ToolbarItem {
                     Button { if store.save() { store.notice = "配置已保存。" } } label: { Text("保存修改") }
@@ -197,16 +222,28 @@ struct HarborView: View {
 
     private var header: some View {
         HStack(spacing: 16) {
+            Image(systemName: section.icon)
+                .font(.system(size: 23, weight: .medium))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 52, height: 52)
+                .background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 16))
+                .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(section.title).font(.title2.bold())
                 Text(section.subtitle).font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             if store.hasUnsavedChanges { Label("有未保存修改", systemImage: "circle.fill").font(.caption).foregroundStyle(.orange) }
-            if !store.pendingCommands.isEmpty { Text("等待网关确认：\(store.pendingCommands.count)").font(.caption).foregroundStyle(.secondary) }
+            if !store.pendingCommands.isEmpty { RuntimeActionLabel(title: "等待确认：\(store.pendingCommands.count)", busy: true).font(.caption).foregroundStyle(.secondary) }
 
-        }.padding(.horizontal, 24).padding(.vertical, 18)
+        }.padding(.horizontal, 24).padding(.vertical, 22)
             .fixedSize(horizontal: false, vertical: true)
+            .background {
+                LinearGradient(colors: [Color.accentColor.opacity(0.07), Color(nsColor: .windowBackgroundColor)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    .allowsHitTesting(false)
+            }
     }
     private func approve(_ message: String, action: @escaping () -> Void) {
         let workspace = store.currentWorkspaceID

@@ -21,14 +21,16 @@ struct FullRowDisclosureStyle: DisclosureGroupStyle {
 private struct DisclosureHeader<Label: View>: View {
     @Binding var isExpanded: Bool
     @FocusState private var isFocused: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ViewBuilder let label: Label
 
     var body: some View {
         Button {
-            isExpanded.toggle()
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { isExpanded.toggle() }
         } label: {
             HStack(alignment: .center, spacing: 10) {
-                Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                Image(systemName: "chevron.right")
+                    .rotationEffect(.degrees(isExpanded ? 90 : 0))
                     .font(.system(size: 12, weight: .semibold))
                     .frame(width: 16)
                     .accessibilityHidden(true)
@@ -62,12 +64,7 @@ struct SettingsSurface<Content: View>: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(16)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
-            .overlay {
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color(nsColor: .separatorColor), lineWidth: 1)
-            }
+            .harborSurface()
     }
 }
 
