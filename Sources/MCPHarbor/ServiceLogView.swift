@@ -25,13 +25,11 @@ struct ServiceLogView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Label("\(server.name) · 服务日志", systemImage: "doc.text.magnifyingglass").font(.title2.bold())
-                Spacer()
+            HStack(alignment: .top, spacing: 16) {
+                HarborSheetHeader(title: "服务日志", subtitle: "\(server.name) · 实时更新 · 最近 \(ServiceLogBuffer.defaultLimit) 条 · 仅本次会话", symbol: "doc.text.magnifyingglass", tint: .teal)
                 Button("关闭") { dismiss() }.keyboardShortcut(.cancelAction)
             }
-            Text("实时更新 · 最近 \(ServiceLogBuffer.defaultLimit) 条 · 仅本次会话")
-                .font(.caption).foregroundStyle(.secondary)
+            Divider()
             DisclosureGroup("记录范围") {
                 Text("记录本机网关观察到的生命周期、调用结果和安全诊断。时间为本应用的接收时间，不是远端事件发生时间。不会显示 MCP 标准输出、原始标准错误、请求参数或返回内容；不读取远端服务内部日志。共享网关只提供当前可用的近期事件，并非完整历史。")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -48,7 +46,7 @@ struct ServiceLogView: View {
                         .toggleStyle(.checkbox).font(.caption)
                         .help("手动滚动会暂停跟随，避免打断阅读；开启后跳到最新日志。")
                 }
-            }
+            }.padding(14).background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
             if lines.isEmpty {
                 ContentUnavailableView(errorsOnly ? "暂无错误日志" : "暂无服务日志", systemImage: "doc.text", description: Text(errorsOnly ? "当前记录中没有错误；可关闭“仅错误”查看全部运行事件。" : "后续收到此服务的运行事件后会显示在这里。其他服务的日志不会混入。"))
             } else {
@@ -72,7 +70,8 @@ struct ServiceLogView: View {
                             // and incoming rows must never switch it back on implicitly.
                             if phase == .interacting { follow.setFollowing(false) }
                         }
-                        .background(Color.secondary.opacity(0.05)).clipShape(RoundedRectangle(cornerRadius: 10))
+                        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color(nsColor: .separatorColor).opacity(0.5)))
                         HStack {
                             Label(follow.isFollowing ? "正在跟随最新日志" : "跟随已暂停 · 可安心阅读", systemImage: follow.isFollowing ? "arrow.down.to.line" : "pause.circle")
                                 .font(.caption).foregroundStyle(.secondary)

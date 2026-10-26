@@ -8,11 +8,12 @@ struct SidebarActivityView: View {
         VStack(alignment: .leading, spacing: 7) {
             Button { expanded.toggle() } label: {
                 HStack {
-                    Label("操作动态", systemImage: "clock.arrow.circlepath").font(.subheadline.weight(.semibold))
+                    Label("操作动态", systemImage: "clock.arrow.circlepath").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                     Image(systemName: expanded ? "chevron.down" : "chevron.right").font(.caption)
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(expanded ? "收起操作动态" : "展开操作动态")
+                .accessibilityValue(expanded ? "已展开" : "已折叠")
             if let latest = store.activities.first {
                 Text(latest.summary).font(.system(size: 12)).lineLimit(2)
                 Text(latest.source.rawValue + " · " + latest.outcome.rawValue)

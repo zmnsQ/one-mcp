@@ -29,20 +29,26 @@ private struct AIManagementSheet: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text("让 AI 管理 One MCP").font(.title2.bold())
-            Text("把下方提示词发给可以操作这台 Mac 的 AI Agent。它会先检查状态，再由你批准具体改动。复制不会安装 Skill，也不会自动连接或运行任何服务。")
-                .font(.callout).foregroundStyle(.secondary)
+            HarborSheetHeader(title: "让 AI 管理 One MCP", subtitle: "先检查，再批准。把清楚的操作边界交给你的助手。", symbol: "sparkles", tint: .indigo)
+            HarborNotice(title: "复制说明，不会执行操作", detail: "把下方提示词发给可以操作这台 Mac 的 AI Agent。它会先检查状态，再由你批准具体改动。复制不会安装 Skill，也不会自动连接或运行任何服务。", symbol: "checkmark.shield", tint: .indigo)
             if let prompt {
+                HStack {
+                    Label("专用管理提示词", systemImage: "text.alignleft").font(.headline)
+                    Spacer()
+                    Text("可选择并手动复制").font(.caption).foregroundStyle(.secondary)
+                }
                 ScrollView {
                     Text(prompt).font(.system(.callout, design: .monospaced)).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading).padding(14)
-                }.background(.quaternary, in: RoundedRectangle(cornerRadius: 12))
-                if let copyError { Text(copyError).font(.caption).foregroundStyle(.red) }
+                }.background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color(nsColor: .separatorColor).opacity(0.5)))
+                if let copyError { Label(copyError, systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.red) }
+                Label(copied ? "已复制，可以粘贴给你的 AI 助手。" : "仅包含运行路径和操作说明，不包含凭据。", systemImage: copied ? "checkmark.circle.fill" : "lock.shield")
+                    .font(.caption).foregroundStyle(copied ? Color.green : Color.secondary)
+                Divider()
                 HStack {
-                    Text(copied ? "已复制，可以粘贴给你的 AI 助手。" : "仅包含运行路径和操作说明，不包含凭据。")
-                        .font(.caption).foregroundStyle(.secondary)
+                    Button("关闭") { dismiss() }.keyboardShortcut(.cancelAction)
                     Spacer()
-                    Button("关闭") { dismiss() }
                     Button(copied ? "再次复制提示词" : "复制提示词") {
                         NSPasteboard.general.clearContents()
                         copied = NSPasteboard.general.setString(prompt, forType: .string)
@@ -51,13 +57,12 @@ private struct AIManagementSheet: View {
                 }
                 .onChange(of: prompt) { _, _ in copied = false; copyError = nil }
             } else {
-                Label("运行组件尚未就绪", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
-                Text(store.runtimeFilesReady ? promptError : store.runtimeSetupSummary).font(.callout)
+                HarborNotice(title: "运行组件尚未就绪", detail: store.runtimeFilesReady ? promptError : store.runtimeSetupSummary, symbol: "exclamationmark.triangle", tint: .orange)
                 Text("请返回设置，点击“自动检查并修复”。组件就绪后再生成提示词。")
                     .font(.caption).foregroundStyle(.secondary)
                 Spacer()
-                HStack { Spacer(); Button("关闭") { dismiss() } }
+                HStack { Spacer(); Button("关闭") { dismiss() }.keyboardShortcut(.cancelAction) }
             }
-        }.padding(24).frame(width: 720, height: 580)
+        }.padding(24).frame(width: 720, height: 660)
     }
 }

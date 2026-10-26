@@ -16,18 +16,23 @@ struct SidebarRuntimeControls: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SidebarActivityView(confirm: confirm)
-            Divider()
             Button { showDetails = true } label: {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 7) {
                         Image(systemName: store.menuGatewayStatus.symbol)
-                            .foregroundStyle(store.menuGatewayStatus.color).accessibilityHidden(true)
-                        Text("网关 · \(store.menuGatewayStatus.title)").font(.subheadline.weight(.semibold))
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(store.menuGatewayStatus.color)
+                            .frame(width: 32, height: 32)
+                            .background(store.menuGatewayStatus.color.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("本地网关").font(.system(size: 11)).foregroundStyle(.secondary)
+                            Text(store.menuGatewayStatus.title).font(.subheadline.weight(.semibold))
+                        }
                         Spacer(minLength: 0)
                         Image(systemName: "chevron.right").font(.caption).accessibilityHidden(true)
                     }
-                    Text(summary.activityText).font(.system(size: 12))
+                    Text(summary.activityText).font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
                     if summary.failureCount > 0 {
                         Label("\(summary.failureCount) 项异常 · 查看状态", systemImage: "exclamationmark.triangle.fill")
                             .font(.system(size: 12, weight: .medium))
@@ -45,10 +50,10 @@ struct SidebarRuntimeControls: View {
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(8)
+                .padding(.vertical, 4)
                 .contentShape(Rectangle())
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.plain)
             .help("查看当前连接状态和上次全部启动的详细结果")
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 8) { startAllButton; stopAllButton }
@@ -64,8 +69,14 @@ struct SidebarRuntimeControls: View {
             if store.hasUnsavedChanges {
                 Text("先保存修改，再全部启动").font(.system(size: 12)).foregroundStyle(.secondary)
             }
-            Text("仅监听本机 · 工具默认不开放").font(.system(size: 12)).foregroundStyle(.secondary)
+            Label("仅监听本机 · 工具默认不开放", systemImage: "lock.shield")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            Divider().padding(.vertical, 2)
+            SidebarActivityView(confirm: confirm)
         }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(Color(nsColor: .separatorColor).opacity(0.35)))
         .padding(.horizontal, 12).padding(.bottom, 14)
         .sheet(isPresented: $showDetails) {
             RuntimeStatusDetails().environmentObject(store)
@@ -104,11 +115,11 @@ private struct RuntimeStatusDetails: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("运行状态与启动结果").font(.title2.bold())
-                Spacer()
+            HStack(alignment: .top, spacing: 16) {
+                HarborSheetHeader(title: "运行状态与启动结果", subtitle: "当前连接与上次启动结果分开查看，避免把提交当成就绪。", symbol: "waveform.path.ecg", tint: .teal)
                 Button("关闭") { dismiss() }.keyboardShortcut(.cancelAction)
             }
+            Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     SettingsSurface {
@@ -148,11 +159,10 @@ private struct RuntimeStatusDetails: View {
                                 .font(.callout).foregroundStyle(.secondary)
                         }
                     }
-                    Text("就绪不代表远端调用已验证。停止或重启服务可能影响依赖它的客户端。")
-                        .font(.callout).foregroundStyle(.secondary)
+                    HarborNotice(title: "本机状态 ≠ 远端调用验证", detail: "就绪不代表远端调用已验证。停止或重启服务可能影响依赖它的客户端。", symbol: "info.circle", tint: .teal)
                 }
             }
         }
-        .padding(24).frame(width: 600, height: 560)
+        .padding(24).frame(width: 620, height: 640)
     }
 }

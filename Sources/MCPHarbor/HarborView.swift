@@ -2,6 +2,7 @@ import SwiftUI
 
 struct HarborView: View {
     @EnvironmentObject private var store: HarborStore
+    @ObservedObject private var navigationRouter = HarborNavigationRouter.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirmation = ""
     @State private var pendingAction: (() -> Void)?
@@ -51,29 +52,13 @@ struct HarborView: View {
     @State private var showRuntimeInstances = false
     @State private var showWorkspaceSheet = false
     @State private var workspaceName = ""
+    @State private var servicePane = "使用与授权"
+    @State private var serviceFilter = ""
+    @State private var settingsWide = false
     private var selectedIndex: Int? { store.preferences.servers.firstIndex { $0.id == store.selectedID } }
     var body: some View {
         NavigationSplitView {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(spacing: 10) {
-                    BrandMark().frame(width: 38, height: 38)
-                    VStack(alignment: .leading) { Text("One MCP").font(.headline); Text("本机工具，清楚授权。").font(.caption).foregroundStyle(.secondary) }
-                }.padding(.horizontal).padding(.top, 18)
-                HStack {
-                    Picker("工作空间", selection: Binding(get: { store.currentWorkspaceID }, set: { store.switchWorkspace($0) })) {
-                        ForEach(store.workspaces) { Text($0.name).tag($0.id) }
-                    }.labelsHidden().disabled(store.anyProcessRunning)
-                    Button { showWorkspaceSheet = true } label: { Image(systemName: "folder.badge.plus") }.help("新建工作空间").accessibilityLabel("新建工作空间").disabled(store.anyProcessRunning)
-                }.padding(.horizontal)
-                List(selection: Binding<Section?>(get: { section }, set: { if let value = $0 { section = value } })) {
-                    ForEach(Section.allCases) { item in
-                        Label(item.title, systemImage: item.icon).tag(item)
-                            .accessibilityHint(item.subtitle)
-                    }
-                }.listStyle(.sidebar)
-                SidebarRuntimeControls(confirm: { message, action in approve(message, action: action) })
-            }
-            .navigationSplitViewColumnWidth(min: 245, ideal: 265)
+            workspaceSidebar
         } detail: {
             VStack(spacing: 0) {
                 header
@@ -144,17 +129,19 @@ struct HarborView: View {
         .sheet(item: $serviceLogServer) { server in ServiceLogView(server: server).environmentObject(store) }
         .sheet(isPresented: $showWorkspaceSheet) {
             VStack(alignment: .leading, spacing: 18) {
-                Text("新建工作空间").font(.title2.bold())
-                Text("各工作空间独立保存 MCP、隧道与 Keychain 命名空间。不会自动启动连接。").font(.caption)
+                HarborSheetHeader(title: "新建工作空间", subtitle: "为一组工具创建独立的连接环境。", symbol: "square.stack.3d.up.badge.plus")
+                HarborNotice(title: "独立配置，不自动启动", detail: "各空间独立保存 MCP、隧道与 Keychain 命名空间。创建不会启动连接。", symbol: "lock.shield")
+                Text("工作空间名称").font(.subheadline.weight(.medium))
                 TextField("名称", text: $workspaceName).textFieldStyle(.roundedBorder)
                 HStack { Button("取消") { showWorkspaceSheet = false }; Spacer(); Button("创建") { if store.createWorkspace(name: workspaceName) { workspaceName = ""; showWorkspaceSheet = false } }.buttonStyle(.glassProminent).disabled(workspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-            }.padding(24).frame(width: 460)
+            }.padding(24).frame(width: 520).background(.regularMaterial)
         }
         .sheet(isPresented: $store.showImportPreview, onDismiss: { store.cancelImportPreview() }) { ImportPreview().environmentObject(store) }
-        .alert("确认本机执行", isPresented: $showConfirmation) {
-            Button("取消", role: .cancel) { pendingAction = nil }
-            Button("继续") { let action = pendingAction; pendingAction = nil; action?() }
-        } message: { Text(confirmation) }
+        .sheet(isPresented: $showConfirmation, onDismiss: { pendingAction = nil }) {
+            HarborConfirmationSheet(message: confirmation, onCancel: { pendingAction = nil; showConfirmation = false }, onContinue: {
+                let action = pendingAction; pendingAction = nil; showConfirmation = false; action?()
+            })
+        }
         .alert("请留意", isPresented: Binding(get: { store.errorMessage != nil }, set: { if !$0 { store.errorMessage = nil } })) {
             Button("知道了") { store.errorMessage = nil }
         } message: { Text(store.errorMessage ?? "") }
@@ -165,16 +152,14 @@ struct HarborView: View {
             }
         }) {
             VStack(alignment: .leading, spacing: 20) {
-                Text("添加 MCP").font(.title2.bold())
-                Text("选择一种添加方式。导入后可先核对，不会自动运行程序。")
-                    .font(.callout).foregroundStyle(.secondary)
+                HarborSheetHeader(title: "连接你的工具", subtitle: "选择添加方式，下一步再核对程序与开放范围。", symbol: "shippingbox.fill")
                 Button {
                     importAfterAddDismiss = true
                     section = .servers
                     showAddMCP = false
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("从已有应用导入…", systemImage: "doc.badge.plus").font(.headline)
+                        Label("从已有应用导入…", systemImage: "doc.badge.plus").font(.title3.weight(.semibold))
                         Text("选择 Claude、Cursor 等应用的 MCP 配置文件，再勾选要添加的项目。")
                             .font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
@@ -185,7 +170,7 @@ struct HarborView: View {
                     store.addServer()
                 } label: {
                     VStack(alignment: .leading, spacing: 6) {
-                        Label("手动添加", systemImage: "plus").font(.headline)
+                        Label("手动添加", systemImage: "plus.circle.fill").font(.title3.weight(.semibold))
                         Text("填写程序路径和启动参数，适合尚未配置的 MCP。")
                             .font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
@@ -195,8 +180,15 @@ struct HarborView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack { Spacer(); Button("取消", role: .cancel) { showAddMCP = false } }
-            }.padding(24).frame(width: 480)
+            }.padding(24).frame(width: 560).background(.regularMaterial)
         }
+        .onReceive(navigationRouter.$destination) { destination in
+            guard let destination, let requested = Section(rawValue: destination) else { return }
+            section = requested
+            navigationRouter.destination = nil
+        }
+        .onChange(of: store.selectedID) { _, _ in servicePane = "使用与授权" }
+        .onChange(of: store.currentWorkspaceID) { _, _ in serviceFilter = ""; servicePane = "使用与授权" }
         .task(id: store.currentWorkspaceID) { store.autofillRememberedTunnelKey() }
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -218,6 +210,49 @@ struct HarborView: View {
             }
         }
         .disclosureGroupStyle(FullRowDisclosureStyle())
+    }
+
+    private var workspaceSidebar: some View {
+            VStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 20) {
+                    HStack(spacing: 12) {
+                        BrandMark().frame(width: 46, height: 46)
+                            .padding(6).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 17))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("One MCP").font(.system(size: 20, weight: .bold, design: .rounded))
+                            Text("你的工具连接中心").font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("当前工作空间").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary)
+                        HStack {
+                            Image(systemName: "square.stack.3d.up.fill").foregroundStyle(Color.accentColor)
+                            Picker("工作空间", selection: Binding(get: { store.currentWorkspaceID }, set: { store.switchWorkspace($0) })) {
+                                ForEach(store.workspaces) { Text($0.name).tag($0.id) }
+                            }.labelsHidden().disabled(store.anyProcessRunning)
+                            Button { showWorkspaceSheet = true } label: { Image(systemName: "plus") }
+                                .buttonStyle(.plain).help("新建工作空间").accessibilityLabel("新建工作空间").disabled(store.anyProcessRunning)
+                        }.padding(10).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    }
+                }.padding(20)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("工作空间").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.bottom, 6)
+                        ForEach([Section.dashboard, .servers, .tunnels]) { item in
+                            HarborNavigationRow(title: item.title, subtitle: item.subtitle, symbol: item.icon, selected: section == item) { section = item }
+                        }
+                        Text("管理").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.top, 16).padding(.bottom, 6)
+                        HarborNavigationRow(title: Section.settings.title, subtitle: "运行环境 · 安全 · 数据", symbol: Section.settings.icon, selected: section == .settings) { section = .settings }
+                    }.padding(.horizontal, 12)
+                }
+                ScrollView {
+                    SidebarRuntimeControls(confirm: { message, action in approve(message, action: action) })
+                }.frame(maxHeight: 300)
+            }
+            .background {
+                LinearGradient(colors: [Color.accentColor.opacity(0.055), Color(nsColor: .windowBackgroundColor).opacity(0.6)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            }
+            .navigationSplitViewColumnWidth(min: 260, ideal: 280, max: 320)
     }
 
     private var header: some View {
@@ -264,10 +299,13 @@ struct HarborView: View {
         return ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(server.name).font(.largeTitle.bold()).fixedSize(horizontal: false, vertical: true)
-                    Text(serviceStatus(server.id)).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    HarborSheetHeader(title: server.name, subtitle: server.isCLI ? "将命令行能力连接给 AI，按工具控制可用范围。" : "把本机工具连接给 AI，只开放你明确选择的能力。", symbol: server.isCLI ? "terminal.fill" : "shippingbox.fill")
                     HStack {
-                    Button(server.isCLI ? "启动 CLI 服务" : "发现工具 / 启动", systemImage: "play.fill") {
+                        StatusBadge(status: store.menuServerStatus(server.id))
+                        Text("已选 \(Set(server.allowedTools).count) 项工具 · " + toolLiveCount(server.id)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    HStack {
+                    Button(server.isCLI ? "启动服务" : "启动并发现工具", systemImage: "play.fill") {
                         approve("将在 Mac 上执行 \(server.executable) 及所填参数。程序具有你账户的文件与服务权限，不是沙箱；仅白名单工具可通过网关调用。若选择包管理器，还可能执行下载的程序。确认启动？") { store.startServer(server) }
                     }.buttonStyle(.glassProminent).disabled(running || !store.gatewayReady || store.startAllBusy)
                     Button("停止", systemImage: "stop.fill") { approve(ServiceStopImpact.message(name: server.name)) { store.stopServer(server) } }.buttonStyle(.glass).disabled(!running)
@@ -285,13 +323,23 @@ struct HarborView: View {
                         Text("点击左侧“启动网关”继续").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                Picker("服务页面", selection: $servicePane) {
+                    Text("使用与授权").tag("使用与授权")
+                    Text("程序配置").tag("程序配置")
+                }.pickerStyle(.segmented)
+                if servicePane == "使用与授权" {
+                    HarborNotice(title: "下一步", detail: serviceNextStep(server), symbol: "arrow.right.circle.fill")
+                    if server.executable.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Button("填写程序配置") { servicePane = "程序配置" }.buttonStyle(.borderedProminent)
+                    }
+                    ToolSelectionView(server: $store.preferences.servers[index], confirm: { message, action in
+                        approve(message, action: action)
+                    }).id(server.id)
+                } else {
                 Toggle("参与全部启动", isOn: Binding(get: { store.preferences.servers[index].participatesInStartAll },
                     set: { store.preferences.servers[index].startWithAll = $0 }))
                     .help("取消后仅从全部启动中排除，不会停止正在运行的服务，也不影响手动启动")
                     .disabled(store.startAllBusy)
-                ToolSelectionView(server: $store.preferences.servers[index], confirm: { message, action in
-                    approve(message, action: action)
-                }).id(server.id)
                 ProcessConfigurationView(server: $store.preferences.servers[index], locked: running || store.startAllBusy)
                 if server.isCLI {
                     CLIServiceEditor(configuration: Binding(get: { store.preferences.servers[index].cli ?? CLIServiceConfiguration() }, set: { store.preferences.servers[index].cli = $0 }), allowedTools: $store.preferences.servers[index].allowedTools)
@@ -308,7 +356,19 @@ struct HarborView: View {
                 Button("移除服务器配置", role: .destructive) {
                     approve("停止连接并移除已保存的配置？不会删除 MCP 程序或其文件。") { store.removeServer(server) }
                 }.disabled(running)
+                }
             }.padding(24)
+        }
+    }
+    private func serviceNextStep(_ server: ServerConfig) -> String {
+        if server.executable.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return "先在“程序配置”填写工具程序，再回来启动和选择能力。" }
+        if !store.gatewayReady { return "先启动左侧本地网关，再启动这个服务；不会自动开放任何工具。" }
+        switch store.menuServerStatus(server.id) {
+        case .running: return server.allowedTools.isEmpty ? "服务已运行。选择下方需要开放的工具，再保存并应用授权。" : "核对下方工具范围；需要从远端使用时，前往“隧道”绑定这个服务。"
+        case .failed: return "启动出现异常。先查看服务日志，再到“程序配置”核对路径和参数。"
+        case .unknown: return "尚未确认运行状态，请先检查网关连接。不要重复提交启动。"
+        case .starting, .checking, .stopping: return "操作进行中，请等待网关返回实际状态。"
+        default: return "确认程序来源后启动服务，随后选择允许 AI 调用的工具。"
         }
     }
     private func toolLiveCount(_ id: String) -> String {
@@ -344,11 +404,18 @@ struct HarborView: View {
                     VStack(alignment: .leading, spacing: 8) {
                     Button("添加 MCP", systemImage: "plus") { showAddMCP = true }
                         .keyboardShortcut("n", modifiers: [.command, .shift]).padding(.horizontal, 12).padding(.top, 12)
+                    TextField("查找服务", text: $serviceFilter).textFieldStyle(.roundedBorder).padding(.horizontal, 12)
+                    if !serviceFilter.isEmpty && !store.preferences.servers.contains(where: { $0.name.localizedStandardContains(serviceFilter) }) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("没有匹配的服务", systemImage: "magnifyingglass").font(.caption).foregroundStyle(.secondary)
+                            Button("清除筛选") { serviceFilter = "" }.font(.caption)
+                        }.padding(12)
+                    }
                     List(selection: $store.selectedID) {
-                        ForEach(store.preferences.servers) { server in
+                        ForEach(store.preferences.servers.filter { serviceFilter.isEmpty || $0.name.localizedStandardContains(serviceFilter) }) { server in
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(server.name).font(.headline)
-                                Text(serviceStatus(server.id)).font(.caption).foregroundStyle(.secondary)
+                                Label(store.menuServerStatus(server.id).title, systemImage: store.menuServerStatus(server.id).symbol).font(.caption).foregroundStyle(store.menuServerStatus(server.id).color)
                                 Text("已选 \(Set(server.allowedTools).count) · " + toolLiveCount(server.id))
                                     .font(.caption2).foregroundStyle(.secondary)
                                 if !store.serverRestartReasons(server.id).isEmpty {
@@ -357,13 +424,23 @@ struct HarborView: View {
                             }.padding(.vertical, 6).tag(server.id)
                         }
                     }.listStyle(.inset)
-                    }.frame(width: 210)
+                    }.frame(minWidth: 200, idealWidth: 220, maxWidth: 250)
+                        .background(.thinMaterial)
                     Divider()
                     if let index = selectedIndex {
-                        serverEditor(index: index).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                        VStack(spacing: 0) {
+                            if !serviceFilter.isEmpty && !store.preferences.servers[index].name.localizedStandardContains(serviceFilter) {
+                                HStack {
+                                    Label("当前打开的服务不在筛选结果中", systemImage: "line.3.horizontal.decrease.circle").font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Button("清除筛选") { serviceFilter = "" }.font(.caption)
+                                }.padding(12).background(.thinMaterial)
+                            }
+                            serverEditor(index: index)
+                        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                     } else {
-                        Text("选择左侧服务，查看配置和工具。")
-                            .foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(24)
+                        ContentUnavailableView("选择一个服务", systemImage: "cursorarrow.click.2", description: Text("先看工具能力与运行状态，再按需打开程序配置。"))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                 }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
@@ -377,6 +454,8 @@ struct HarborView: View {
                     Label("启动网关后即可启动隧道；现在也可以添加或编辑记录。", systemImage: "info.circle")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                SettingsSurface {
+                DisclosureGroup {
                 DisclosureGroup("首次连接与客户端设置") {
                     VStack(alignment: .leading, spacing: 16) {
                         TunnelOnboardingGuide().environmentObject(store)
@@ -395,19 +474,44 @@ struct HarborView: View {
                 DisclosureGroup("连接日志与请求观测") {
                     MCPRequestTracePanel().environmentObject(store)
                 }
+                } label: {
+                    SettingsSectionLabel(title: "连接帮助与高级维护", subtitle: "首次安装、共享认证与连接诊断，按需展开。", symbol: "wrench.and.screwdriver")
+                }
+                }
             }.padding(24)
         }
     }
     private var connectionSettings: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                runtimeSettingsCard
-                aiManagementSettingsCard
-                advancedSettingsCard
-                credentialSettingsCard
-                backupSettingsCard
-                diagnosticSettingsCard
-            }.padding(24)
+            VStack(alignment: .leading, spacing: 20) {
+                HarborNotice(title: "管理当前工作空间", detail: "日常启停在左侧；这里管理运行环境、安全与数据。修改配置后使用顶部保存，不会自动重启。", symbol: "gearshape.2.fill")
+                settingsLayout {
+                    settingsConnectionColumn.frame(maxWidth: .infinity, alignment: .topLeading)
+                    settingsSafetyColumn.frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+            }.onGeometryChange(for: Bool.self) { geometry in
+                geometry.size.width >= 720
+            } action: { settingsWide = $0 }
+            .padding(24)
+        }
+    }
+    private var settingsLayout: AnyLayout {
+        settingsWide ? AnyLayout(HStackLayout(alignment: .top, spacing: 20)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 24))
+    }
+    private var settingsConnectionColumn: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("连接与运行", systemImage: "network").font(.headline).foregroundStyle(.secondary)
+            runtimeSettingsCard
+            advancedSettingsCard
+            diagnosticSettingsCard
+        }
+    }
+    private var settingsSafetyColumn: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Label("安全与数据", systemImage: "lock.shield").font(.headline).foregroundStyle(.secondary)
+            aiManagementSettingsCard
+            credentialSettingsCard
+            backupSettingsCard
         }
     }
 
@@ -516,7 +620,7 @@ struct HarborView: View {
             DisclosureGroup {
                 VStack(alignment: .leading, spacing: 10) {
                     Text("默认仅存在内存。可明确保存到此 Mac 的 Keychain；不会写入配置或导出文件。隧道密钥自动填入需在连接页单独启用。").font(.caption).foregroundStyle(.secondary)
-                    HStack {
+                    VStack(alignment: .leading, spacing: 10) {
                         Button("保存到系统钥匙串") { approve("将当前工作空间已输入的环境变量值与隧道运行密钥保存到这台 Mac 的 Keychain？仅保存非空值，未来可手动载入。") { store.saveCredentialsToKeychain() } }
                         Button("从系统钥匙串载入") { store.loadCredentialsFromKeychain() }
                         Button("删除已存凭据", role: .destructive) { approve("删除此工作空间全部已存 Keychain 凭据（含已移除服务器）？这不会撤销服务端密钥，也不会停止现有进程。") { store.deleteSavedCredentials() } }

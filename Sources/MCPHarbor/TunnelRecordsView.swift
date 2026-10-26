@@ -30,21 +30,50 @@ struct TunnelRecordsView: View {
         editing = TunnelEditSession(record: record, isNew: isNew, preferences: store.preferences,
                                     workspace: store.currentWorkspaceID, revision: store.savedRevision, runtimeKey: store.recordTunnelKeyForEditing(record.id))
     }
+    private var canAdd: Bool { !store.startAllBusy && store.preferences.effectiveTunnelRecords.count < 32 }
+    private var collectionSummary: String {
+        let statuses = store.preferences.effectiveTunnelRecords.map { store.menuTunnelStatus($0.id) }
+        let active = statuses.filter { $0 == .running || $0 == .ready }.count
+        let failed = statuses.filter { $0 == .failed }.count
+        let unknown = statuses.filter { $0 == .unknown }.count
+        return "\(statuses.count) 条入口 · \(active) 条运行 · \(failed) 条异常" + (unknown > 0 ? " · \(unknown) 条待确认" : "")
+    }
+    private func addTunnel() {
+        guard canAdd else { return }
+        var record = TunnelRecord()
+        record.name = "隧道 \(store.preferences.effectiveTunnelRecords.count + 1)"
+        record.profile = "onemcp-" + String(record.id.prefix(12))
+        edit(record, isNew: true)
+    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("隧道").font(.title2.bold())
-                Spacer()
-                Button("添加隧道", systemImage: "plus") {
-                    var record = TunnelRecord()
-                    record.name = "隧道 \(store.preferences.effectiveTunnelRecords.count + 1)"
-                    record.profile = "onemcp-" + String(record.id.prefix(12))
-                    edit(record, isNew: true)
-                }.disabled(store.startAllBusy || store.preferences.effectiveTunnelRecords.count >= 32)
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .top, spacing: 16) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("隧道").font(.title2.bold())
+                    Text("让已授权的 MCP 工具通过指定入口连接 AI 客户端。")
+                        .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Button("添加隧道", systemImage: "plus", action: addTunnel)
+                    .buttonStyle(HarborPrimaryButtonStyle()).disabled(!canAdd)
+                    .help(store.preferences.effectiveTunnelRecords.count >= 32 ? "最多保留 32 条隧道记录" : "先配置绑定和权限；不会自动启动")
             }
+            HStack(spacing: 10) {
+                Image(systemName: "point.3.connected.trianglepath.dotted").foregroundStyle(.teal).accessibilityHidden(true)
+                Text(collectionSummary).font(.caption).monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.teal.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
             if store.preferences.effectiveTunnelRecords.isEmpty {
-                ContentUnavailableView("还没有隧道", systemImage: "point.3.connected.trianglepath.dotted",
-                                       description: Text("添加一条隧道，选择要连接的 MCP 服务。"))
+                ContentUnavailableView {
+                    Label("建立第一个连接入口", systemImage: "point.3.connected.trianglepath.dotted")
+                } description: {
+                    Text("OpenAI 连接工作区；Cloudflare 提供带 OAuth 的公网入口。先选择要绑定的 MCP，保存后再单独确认启动。")
+                } actions: {
+                    Button("配置第一条隧道", action: addTunnel).buttonStyle(HarborPrimaryButtonStyle()).disabled(!canAdd)
+                }
+                .harborSurface()
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), spacing: 16)], alignment: .leading, spacing: 16) {
                 ForEach(store.preferences.effectiveTunnelRecords) { record in
@@ -102,10 +131,13 @@ struct TunnelRecordsView: View {
                 Text("\(record.serverIDs.count) 个 MCP").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 6) {
-                Text("绑定服务").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+                Text("此入口连接的工具服务").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                 Text(TunnelRecordPresentation.bindingSummary(record, servers: store.preferences.servers))
                     .font(.callout).lineLimit(2).frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
                     .help(TunnelRecordPresentation.bindingSummary(record, servers: store.preferences.servers))
+                Label(record.transport == "openai" ? "通过 OpenAI 工作区连接" : "公网访问要求 OAuth 授权", systemImage: record.transport == "openai" ? "building.2" : "lock.shield")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             if let feedback {
                 Label(feedback, systemImage: status == .failed ? "exclamationmark.triangle" : "info.circle")
@@ -170,13 +202,11 @@ private struct TunnelRecordDetails: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(record?.name ?? "隧道详情").font(.title2.bold()).lineLimit(2)
-                    Text("只读详情 · 不会启动隧道或修改配置").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
+                HarborSheetHeader(title: record?.name ?? "隧道详情", subtitle: "只读详情 · 不会启动隧道或修改配置", symbol: "network", tint: .teal)
+                Spacer(minLength: 12)
                 Button("完成") { dismiss() }.keyboardShortcut(.cancelAction)
-            }.padding(20)
+                    .buttonStyle(.bordered)
+            }.padding(20).background(.thinMaterial)
             Divider()
             ScrollView {
                 if let record {
@@ -232,15 +262,28 @@ private struct TunnelRecordDetails: View {
                         .padding(20)
                 }
             }
+            Divider()
+            HStack(spacing: 8) {
+                Image(systemName: "eye").foregroundStyle(.teal).accessibilityHidden(true)
+                Text("查看状态不会启动、停止或公开隧道。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }.padding(.horizontal, 20).padding(.vertical, 14).background(.thinMaterial)
         }.frame(width: 620, height: 660)
+            .background(Color(nsColor: .windowBackgroundColor))
     }
     private func detailSection<Content: View>(_ title: String, icon: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label(title, systemImage: icon).font(.headline)
+            HStack(spacing: 10) {
+                Image(systemName: icon).font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.teal).frame(width: 30, height: 30)
+                    .background(Color.teal.opacity(0.10), in: RoundedRectangle(cornerRadius: 9))
+                    .accessibilityHidden(true)
+                Text(title).font(.headline)
+            }
             content()
         }
-        .frame(maxWidth: .infinity, alignment: .leading).padding(16)
-        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 12))
+        .frame(maxWidth: .infinity, alignment: .leading).harborSurface()
     }
 
 }
@@ -345,19 +388,20 @@ private struct TunnelRecordEditor: View {
     }
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(session.isNew ? "添加隧道" : "编辑隧道").font(.title2.bold())
-                    Text("账号与凭据 → 隧道配置 → 创建并保存。启动仍需单独确认。").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }.padding(20)
+            HarborSheetHeader(title: session.isNew ? "添加隧道" : "编辑隧道",
+                              subtitle: "账号与凭据 → 隧道配置 → 创建并保存。启动仍需单独确认。",
+                              symbol: session.isNew ? "point.3.connected.trianglepath.dotted" : "slider.horizontal.3", tint: .teal)
+                .padding(20).background(.thinMaterial)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     configuration.disabled(busy || contextChanged || completed)
-                    if busy { Label("隧道运行或操作中，停止后可修改配置。", systemImage: "info.circle").font(.caption) }
-                    if contextChanged { Text("配置已在其他位置改变，请取消后重新打开。").foregroundStyle(.orange) }
+                    if busy {
+                        HarborNotice(title: "配置暂时锁定", detail: "隧道运行或操作中，停止后可修改配置。", symbol: "lock", tint: .orange)
+                    }
+                    if contextChanged {
+                        HarborNotice(title: "配置已改变", detail: "配置已在其他位置改变，请取消后重新打开。", symbol: "arrow.triangle.2.circlepath", tint: .orange)
+                    }
                     if let phase {
                         Label(phase.message, systemImage: completed ? "checkmark.circle.fill" : "info.circle")
                             .font(.callout).foregroundStyle(completed ? Color.green : Color.secondary)
@@ -373,25 +417,31 @@ private struct TunnelRecordEditor: View {
                                 if record.transport == "openai" { credentials }
                                 actions.disabled(unsaved)
                             }.padding(.top, 8).disabled(contextChanged)
-                        }
+                        }.harborSurface()
                     }
                     if wantsCreation {
                         Text("将为已有 Tunnel ID 创建本地 Profile，不创建 Platform 远端隧道，也不启动隧道。已有文件不会覆盖。")
                             .font(.caption).foregroundStyle(.secondary)
                         if !store.gatewayReady { Text("请先启动本机网关，再点击创建。草稿可留在此处；不会自动启动网关。 ").font(.caption).foregroundStyle(.orange) }
                     }
-                    if let saveError { Text(saveError).foregroundStyle(.red).font(.callout) }
+                    if let saveError {
+                        HarborNotice(title: "需要处理", detail: saveError, symbol: "exclamationmark.triangle", tint: .red)
+                    }
                 }.padding(20)
             }
             Divider()
-            HStack {
+            HStack(spacing: 12) {
                 Button(savedDraft == nil ? "取消" : busy ? "关闭（创建继续）" : "关闭（配置已保留）", role: .cancel) { dismiss() }.keyboardShortcut(.cancelAction)
-                Spacer()
+                Spacer(minLength: 8)
+                Label(completed ? "已完成" : unsaved ? "草稿未保存" : "配置已保存", systemImage: completed ? "checkmark.circle" : unsaved ? "pencil.circle" : "checkmark.seal")
+                    .font(.caption).foregroundStyle(completed ? Color.green : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Button(primaryTitle) { save() }
                     .buttonStyle(HarborPrimaryButtonStyle()).keyboardShortcut(.defaultAction)
                     .disabled(!completed && (busy || contextChanged || record.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || record.serverIDs.isEmpty || (wantsCreation && !store.gatewayReady)))
-            }.padding(20)
+            }.padding(20).background(.thinMaterial)
         }.frame(width: 660, height: 720).textFieldStyle(.roundedBorder)
+        .background(Color(nsColor: .windowBackgroundColor))
         .interactiveDismissDisabled(unsaved || busy)
         .alert("确认隧道操作", isPresented: $showConfirmation) {
             Button("取消", role: .cancel) { pendingAction = nil }
@@ -404,29 +454,31 @@ private struct TunnelRecordEditor: View {
                 Text("OpenAI 私有隧道").tag("openai")
                 Text("Cloudflare 公网入口").tag("cloudflare")
             }.pickerStyle(.segmented)
-            if record.transport == "openai" { accountConfiguration }
-            Divider()
-            Text("2 · 隧道基础配置").font(.headline)
-            TextField("隧道名称", text: binding(\.name))
-            Text("绑定的 MCP 服务（至少选择一个）").font(.subheadline.bold())
-            if store.preferences.servers.isEmpty { Text("请先在 MCP 服务页面添加一个服务。").font(.caption).foregroundStyle(.secondary) }
-            ForEach(store.preferences.servers) { server in
-                Toggle(server.name, isOn: Binding(get: { record.serverIDs.contains(server.id) }, set: { selected in
-                    var ids = record.serverIDs.filter { $0 != server.id }
-                    if selected { ids.append(server.id) }
-                    binding(\.serverIDs).wrappedValue = ids
-                }))
-            }
-            ForEach(record.serverIDs.filter { id in !store.preferences.servers.contains(where: { $0.id == id }) }, id: \.self) { id in
-                HStack {
-                    Text("已移除服务：\(id)").foregroundStyle(.orange)
-                    Button("移除绑定") { binding(\.serverIDs).wrappedValue = record.serverIDs.filter { $0 != id } }
+                .padding(12).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 14))
+            if record.transport == "openai" { accountConfiguration.harborSurface() }
+            VStack(alignment: .leading, spacing: 12) {
+                Label("2 · 隧道基础配置", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
+                TextField("隧道名称", text: binding(\.name))
+                Text("绑定的 MCP 服务（至少选择一个）").font(.subheadline.bold())
+                if store.preferences.servers.isEmpty { Text("请先在 MCP 服务页面添加一个服务。").font(.caption).foregroundStyle(.secondary) }
+                ForEach(store.preferences.servers) { server in
+                    Toggle(server.name, isOn: Binding(get: { record.serverIDs.contains(server.id) }, set: { selected in
+                        var ids = record.serverIDs.filter { $0 != server.id }
+                        if selected { ids.append(server.id) }
+                        binding(\.serverIDs).wrappedValue = ids
+                    }))
                 }
-            }
-            if record.transport == "openai" { openAIConfiguration } else { cloudflareConfiguration }
+                ForEach(record.serverIDs.filter { id in !store.preferences.servers.contains(where: { $0.id == id }) }, id: \.self) { id in
+                    HStack {
+                        Text("已移除服务：\(id)").foregroundStyle(.orange)
+                        Button("移除绑定") { binding(\.serverIDs).wrappedValue = record.serverIDs.filter { $0 != id } }
+                    }
+                }
+            }.harborSurface()
+            if record.transport == "openai" { openAIConfiguration.harborSurface() } else { cloudflareConfiguration.harborSurface() }
             DisclosureGroup("高级设置") {
                 Toggle("参与全部启动", isOn: Binding(get: { record.participatesInStartAll }, set: { binding(\.startWithAll).wrappedValue = $0 })).padding(.top, 8)
-            }
+            }.harborSurface()
         }
     }
     private var knownAccounts: [String] {
@@ -435,7 +487,7 @@ private struct TunnelRecordEditor: View {
     }
     private var accountConfiguration: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("1 · 账号与 Runtime 凭据").font(.headline)
+            Label("1 · 账号与 Runtime 凭据", systemImage: "key.horizontal").font(.headline)
             Picker("已有账号", selection: Binding(get: { record.accountID ?? "" }, set: { selectAccount($0) })) {
                 Text("选择账号 / 手动填写").tag("")
                 ForEach(knownAccounts, id: \.self) { account in
@@ -495,7 +547,7 @@ private struct TunnelRecordEditor: View {
         VStack(alignment: .leading, spacing: 10) {
             TextField("已有 OpenAI Tunnel ID（tunnel_…）", text: binding(\.tunnelID))
             Link("在 OpenAI Platform 管理 Tunnel", destination: TunnelHelp.tunnels)
-            Text("3 · 本地 Profile").font(.headline)
+            Label("3 · 本地 Profile", systemImage: "doc.badge.gearshape").font(.headline)
             Picker("保存方式", selection: $createProfile) {
                 Text("创建本地 Profile").tag(true)
                 Text("使用已有 Profile / 仅保存更改").tag(false)
