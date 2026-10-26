@@ -8,6 +8,11 @@ struct OverviewDashboard: View {
     @State private var logServer: ServerConfig?
     @State private var serviceQuery = ""
     @State private var copiedServerID: String?
+    @State private var contentWidth: CGFloat = 0
+    private var wideDashboard: Bool { contentWidth >= 880 }
+    private var dashboardLayout: AnyLayout {
+        wideDashboard ? AnyLayout(HStackLayout(alignment: .top, spacing: 12)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+    }
     private var filteredServices: [ServerConfig] {
         let query = serviceQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         return store.preferences.servers.filter { query.isEmpty || $0.name.localizedStandardContains(query) || $0.id.localizedStandardContains(query) }
@@ -18,7 +23,11 @@ struct OverviewDashboard: View {
     let onOpenSettings: () -> Void
     let onOpenLogs: () -> Void
     let confirm: (String, @escaping () -> Void) -> Void
-    private let columns = [GridItem(.adaptive(minimum: 280), spacing: 16, alignment: .top)]
+    private var columns: [GridItem] {
+        wideDashboard
+            ? Array(repeating: GridItem(.flexible(minimum: 250), spacing: 12, alignment: .top), count: 2)
+            : [GridItem(.adaptive(minimum: 250), spacing: 12, alignment: .top)]
+    }
     private var runningServices: Int { store.menuServers.filter { store.menuServerStatus($0.id) == .running }.count }
     private var activeTunnels: Int { store.menuTunnelIDs.filter { [.running, .ready].contains(store.menuTunnelStatus($0)) }.count }
     private var hasUnknownStates: Bool {
@@ -33,59 +42,113 @@ struct OverviewDashboard: View {
     }
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: 12) {
                 workspaceHero
-                /* Primary actions use the same order at narrow widths. */
-                if !store.gatewayReady {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: store.menuGatewayStatus.symbol).foregroundStyle(store.menuGatewayStatus.color)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(store.menuGatewayStatus == .unknown ? "网关状态未确认" : "先准备本地网关").font(.headline)
-                            Text(store.menuGatewayStatus == .unknown ? "请重新连接网关以获取最新状态。" : "可以先添加服务和隧道。使用左侧启动网关，再启动需要的项目。")
-                                .font(.callout).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Button("运行环境") { onOpenSettings() }
-                    }.padding(18).frame(maxWidth: .infinity, alignment: .leading).background(Color.orange.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+                dashboardLayout {
+                    serviceCollection
+                        .frame(width: wideDashboard ? (contentWidth - 12) * 0.66 : nil, alignment: .topLeading)
+                    VStack(alignment: .leading, spacing: 12) {
+                        tunnelSummary
+                        recentActivity
+                    }.frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-                if store.preferences.servers.isEmpty {
-                    VStack(alignment: .leading, spacing: 14) {
-                        Text("三步连接你的工具").font(.title3.bold())
-                        onboardingStep("1", title: "添加 MCP 服务", detail: "导入或填写工具程序；默认不会开放工具。")
-                        onboardingStep("2", title: "启动并选择工具", detail: "确认程序来源，再选择允许调用的工具。")
-                        onboardingStep("3", title: "创建隧道", detail: "选择 OpenAI 或 Cloudflare，明确绑定服务并验证连接。")
-                        Button("添加第一个 MCP", action: onAddService).buttonStyle(HarborPrimaryButtonStyle())
-                    }.harborSurface()
-                }
-                HStack {
-                    Text("MCP 服务").font(.title3.bold())
-                    Text("\(store.preferences.servers.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                    Spacer()
-                    TextField("筛选服务名称", text: $serviceQuery)
-                        .textFieldStyle(.roundedBorder).frame(maxWidth: 220)
-                        .accessibilityLabel("筛选 MCP 服务，不影响运行状态")
-                }
-                if !store.preferences.servers.isEmpty && filteredServices.isEmpty {
-                    ContentUnavailableView {
-                        Label("没有匹配的服务", systemImage: "magnifyingglass")
-                    } description: { Text("更换关键词或清除筛选；不会改变服务配置。")
-                    } actions: { Button("清除筛选") { serviceQuery = "" } }
-                }
-                LazyVGrid(columns: columns, alignment: .leading, spacing: 16) {
-                    ForEach(filteredServices) { server in serviceCard(server) }
-                }
-                TunnelRecordsView().environmentObject(store)
-            }.padding(24)
+            }
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { contentWidth = $0 }
+            .padding(16)
         }
         .onChange(of: store.currentWorkspaceID) { _, _ in serviceQuery = ""; copiedServerID = nil }
         .sheet(item: $logServer) { server in
             ServiceLogView(server: server).environmentObject(store)
         }
     }
-    @ViewBuilder private var dashboardActions: some View {
-        Button("添加 MCP", systemImage: "plus", action: onAddService).buttonStyle(HarborPrimaryButtonStyle())
-        Button("管理隧道", systemImage: "network", action: onOpenTunnels)
-        Button("查看诊断", systemImage: "waveform.path.ecg", action: onOpenLogs)
+    private var serviceCollection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("MCP 服务").font(.headline)
+                Text("\(store.preferences.servers.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Button("添加", systemImage: "plus", action: onAddService).buttonStyle(.borderedProminent).controlSize(.small)
+                TextField("筛选服务", text: $serviceQuery)
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 160)
+                    .accessibilityLabel("筛选 MCP 服务，不影响运行状态")
+            }
+            if store.preferences.servers.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("三步连接你的工具").font(.headline)
+                    onboardingStep("1", title: "添加 MCP 服务", detail: "导入或填写工具程序，默认不开放工具。")
+                    onboardingStep("2", title: "启动并选择工具", detail: "先确认来源，再选择允许调用的工具。")
+                    onboardingStep("3", title: "按需创建隧道", detail: "仅本机使用时无需创建；远端需绑定并验证。")
+                    Button("添加第一个 MCP", action: onAddService).buttonStyle(.borderedProminent)
+                }.harborSurface()
+            } else if filteredServices.isEmpty {
+                ContentUnavailableView {
+                    Label("没有匹配的服务", systemImage: "magnifyingglass")
+                } description: { Text("更换关键词或清除筛选；不会改变服务配置。")
+                } actions: { Button("清除筛选") { serviceQuery = "" } }
+            }
+            LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                ForEach(filteredServices) { server in serviceCard(server) }
+            }
+        }
+    }
+    private var tunnelSummary: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("隧道连接", systemImage: "network").font(.headline)
+                Spacer(minLength: 4)
+                Button("管理", action: onOpenTunnels).buttonStyle(.borderless)
+            }
+            HStack(spacing: 10) {
+                Image(systemName: "desktopcomputer").font(.title2).foregroundStyle(.secondary).accessibilityHidden(true)
+                Image(systemName: "arrow.right").foregroundStyle(.secondary).accessibilityHidden(true)
+                Image(systemName: "lock.shield").font(.title2).foregroundStyle(.blue).accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("\(activeTunnels) / \(store.menuTunnelIDs.count) 已确认运行").font(.subheadline.weight(.semibold))
+                    Text(hasUnknownStates ? "部分状态待确认" : "绑定服务后对外连接").font(.caption).foregroundStyle(.secondary)
+                }
+            }.accessibilityElement(children: .combine)
+            if store.menuTunnelIDs.isEmpty {
+                Text("尚未配置隧道。本机工具可先独立使用；需要远端接入时再创建。").font(.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(Array(store.menuTunnelIDs.prefix(3)), id: \.self) { id in
+                    MenuStatusRow(name: store.menuTunnelName(id), status: store.menuTunnelStatus(id))
+                }
+                if store.menuTunnelIDs.count > 3 {
+                    Button("查看全部 \(store.menuTunnelIDs.count) 条隧道", action: onOpenTunnels).font(.caption)
+                }
+            }
+            Divider()
+            Button("运行环境与连接配置", systemImage: "gearshape", action: onOpenSettings).font(.caption)
+            Text("管理隧道 → 选择入口 → 绑定 MCP → 验证连接")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.harborSurface()
+    }
+    private var recentActivity: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label("最近活动", systemImage: "clock.arrow.circlepath").font(.headline)
+                Spacer()
+                Text("本次会话").font(.caption2).foregroundStyle(.secondary)
+            }
+            if store.activities.isEmpty {
+                Text("暂无操作记录；实际发生的配置与运行事件会显示在这里。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(Array(store.activities.prefix(3))) { record in
+                HStack(alignment: .top, spacing: 8) {
+                    Image(systemName: record.outcome == .failed ? "exclamationmark.circle" : "clock")
+                        .foregroundStyle(record.outcome == .failed ? Color.orange : Color.blue)
+                        .frame(width: 24, height: 24).accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(record.summary).font(.caption.weight(.medium)).lineLimit(2).help(record.summary)
+                        Text(record.source.rawValue + " · " + record.outcome.rawValue).font(.caption2).foregroundStyle(.secondary)
+                        Text(record.time, style: .relative).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }.accessibilityElement(children: .combine)
+            }
+            Text("完整操作动态可在左侧展开查看").font(.caption2).foregroundStyle(.secondary)
+            Button("查看诊断", systemImage: "waveform.path.ecg", action: onOpenLogs).font(.caption)
+        }.harborSurface()
     }
     private var heroTitle: String {
         if failures > 0 { return "有连接需要处理" }
@@ -102,43 +165,56 @@ struct OverviewDashboard: View {
         return "先添加工具，再从左侧启动网关与需要的连接。"
     }
     private var workspaceHero: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            HStack(alignment: .center, spacing: 24) {
-                VStack(alignment: .leading, spacing: 10) {
-                    Label("你的连接工作台", systemImage: "sparkle")
-                        .font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
-                    Text(heroTitle).font(.system(size: 30, weight: .bold, design: .rounded))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(heroDetail).font(.callout).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center, spacing: 16) {
+                Image(systemName: store.menuGatewayStatus.symbol)
+                    .font(.system(size: 30, weight: .medium)).foregroundStyle(store.menuGatewayStatus.color)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(heroTitle).font(.system(size: 23, weight: .bold, design: .rounded))
+                    Text(heroDetail).font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }.frame(maxWidth: .infinity, alignment: .leading)
-                BrandMark().frame(width: 92, height: 92).accessibilityHidden(true)
+                metric("服务", value: "\(runningServices) / \(store.menuServers.count)")
+                metric("隧道", value: "\(activeTunnels) / \(store.menuTunnelIDs.count)")
+                heroRuntimeActions
             }
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 24)], alignment: .leading, spacing: 18) {
-                metric("本地网关", value: store.menuGatewayStatus.title, icon: "network", color: store.menuGatewayStatus.color)
-                metric("MCP 服务运行", value: store.menuGatewayStatus == .unknown ? "未确认" : "\(runningServices) / \(store.menuServers.count)", icon: "shippingbox.fill", color: .blue)
-                metric("隧道运行", value: store.menuGatewayStatus == .unknown ? "未确认" : "\(activeTunnels) / \(store.menuTunnelIDs.count)", icon: "point.3.connected.trianglepath.dotted", color: .teal)
-                metric("异常", value: failures == 0 && hasUnknownStates ? "待确认" : String(failures), icon: "exclamationmark.triangle.fill", color: failures > 0 ? .red : .secondary)
-            }
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 12) { dashboardActions }
-                VStack(alignment: .leading, spacing: 12) { dashboardActions }
-            }
-        }
-        .padding(6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .harborSurface()
+        }.harborSurface()
     }
-    private func metric(_ title: String, value: String, icon: String, color: Color) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label(title, systemImage: icon).font(.caption).foregroundStyle(.secondary)
+    private var heroRuntimeActions: some View {
+        HStack(spacing: 8) {
+            Button {
+                let plan = store.preferences, workspace = store.currentWorkspaceID, revision = store.savedRevision
+                confirm(store.startAllConfirmation) {
+                    store.startAll(expectedPlan: plan, expectedWorkspace: workspace, expectedRevision: revision)
+                }
+            } label: {
+                heroActionLabel(store.startAllBusy ? "启动中" : "全部启动", symbol: store.startAllBusy ? "hourglass" : "play.fill")
+            }.buttonStyle(TrayActionStyle(tint: .blue))
+                .disabled(store.startAllBusy || store.gatewayStartBusy || store.menuGatewayStatus == .stopping || store.takeoverBusy || store.hasUnsavedChanges)
+                .help(store.hasUnsavedChanges ? "请先保存修改" : "确认后依次启动当前工作空间的连接")
+            Button {
+                confirm("停止共享网关及全部连接？所有连接到此实例的 AI 和应用都会受到影响。将取消后续启动并请求停止当前进程；配置会保留。") { store.shutdown() }
+            } label: {
+                heroActionLabel(store.menuGatewayStatus == .stopping ? "停止中" : "全部停止", symbol: store.menuGatewayStatus == .stopping ? "hourglass" : "stop.fill")
+            }.buttonStyle(TrayActionStyle(tint: .red))
+                .disabled(store.menuGatewayStatus == .stopping || (!store.anyProcessRunning && !store.startAllBusy && !store.gatewayStartBusy) || store.takeoverBusy)
+        }
+    }
+    private func heroActionLabel(_ title: String, symbol: String) -> some View {
+        VStack(spacing: 4) {
+            Image(systemName: symbol).font(.system(size: 20, weight: .semibold)).accessibilityHidden(true)
+            Text(title).font(.system(size: 11, weight: .semibold))
+        }.frame(width: 68, height: 56)
+    }
+    private func metric(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
             Text(value).font(.system(size: 23, weight: .semibold, design: .rounded)).monospacedDigit()
-                .foregroundStyle(color)
-                .lineLimit(1).minimumScaleFactor(0.7)
+                .foregroundStyle(Color.blue).fixedSize()
                 .contentTransition(.numericText())
                 .animation(reduceMotion ? nil : .easeInOut(duration: 0.24), value: value)
-        }.frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
+            Text(title + "已确认运行").font(.caption2).foregroundStyle(.secondary)
+        }.accessibilityElement(children: .combine)
     }
     private func onboardingStep(_ number: String, title: String, detail: String) -> some View {
         HStack(alignment: .top, spacing: 12) {
@@ -150,14 +226,14 @@ struct OverviewDashboard: View {
         let status = store.menuServerStatus(server.id)
         let busy = store.hasPendingCommand(for: server.id) || store.startAllBusy || [.starting, .stopping].contains(status)
         let bindings = store.preferences.effectiveTunnelRecords.filter { $0.serverIDs.contains(server.id) }.count
-        return VStack(alignment: .leading, spacing: 16) {
+        return VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                Image(systemName: "shippingbox.fill").foregroundStyle(.blue).font(.system(size: 25, weight: .medium))
-                    .frame(width: 52, height: 52)
+                Image(systemName: "shippingbox.fill").foregroundStyle(.blue).font(.system(size: 22, weight: .medium))
+                    .frame(width: 42, height: 42)
                     .background(LinearGradient(colors: [Color.blue.opacity(0.16), Color.cyan.opacity(0.05)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16))
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(server.name).font(.system(size: 17, weight: .semibold)).lineLimit(2).help(server.name)
+                    Text(server.name).font(.system(size: 15, weight: .semibold)).lineLimit(2).help(server.name)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     Text("MCP 工具服务 · 按授权开放").font(.caption).foregroundStyle(.secondary)
                 }

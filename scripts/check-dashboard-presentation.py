@@ -34,13 +34,21 @@ with tempfile.TemporaryDirectory(prefix='onemcp-presentation-') as directory:
     subprocess.run([os.environ.get('SWIFTC', 'swiftc'), '-module-cache-path', str(path / 'modules'), str(path / 'main.swift'), '-o', str(path / 'check')], check=True)
     subprocess.run([str(path / 'check')], check=True)
 
-# The dashboard embeds one canonical tunnel collection, without a second wrapper heading.
+# Compact overview projects existing runtime state; full editing stays in the tunnel page.
 dashboard = (root / 'Sources/MCPHarbor/OverviewDashboard.swift').read_text()
-tunnels = (root / 'Sources/MCPHarbor/TunnelRecordsView.swift').read_text()
-assert dashboard.count('TunnelRecordsView()') == 1
-assert 'Text("独立隧道")' not in dashboard
-assert 'Text("隧道")' in tunnels
-assert 'ForEach(store.preferences.effectiveTunnelRecords)' in tunnels
-assert '本地就绪 ≠' not in dashboard
-assert 'GridItem(.adaptive(minimum: 150)' in dashboard
-print('PASS single canonical tunnel section and adaptive metrics (source contract only)')
+assert 'TunnelRecordsView()' not in dashboard
+assert 'private var dashboardLayout: AnyLayout' in dashboard
+assert 'AnyLayout(HStackLayout' in dashboard and 'AnyLayout(VStackLayout' in dashboard
+assert '0.66' in dashboard
+assert 'store.menuTunnelIDs.prefix(3)' in dashboard
+assert 'store.activities.prefix(3)' in dashboard
+assert 'record.summary' in dashboard and 'record.time' in dashboard
+assert 'action: onOpenTunnels' in dashboard
+assert 'expectedPlan: plan, expectedWorkspace: workspace, expectedRevision: revision' in dashboard
+assert 'confirm(store.startAllConfirmation)' in dashboard
+assert 'confirm("停止共享网关及全部连接？' in dashboard
+assert 'guard workspace == store.currentWorkspaceID, store.preferences.servers.contains(server)' in dashboard
+assert '.disabled(busy || !store.gatewayReady || status == .unknown)' in dashboard
+assert 'height: 56' in dashboard
+assert 'width: 92' not in dashboard
+print('PASS compact hero, single adaptive layout, runtime summaries, real activities and guarded actions (source contract only)')

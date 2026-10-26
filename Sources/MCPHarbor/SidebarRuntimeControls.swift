@@ -12,53 +12,28 @@ struct SidebarRuntimeControls: View {
             tunnels: store.menuTunnelIDs.map { store.menuTunnelStatus($0) })
     }
     private var failedSteps: Int { store.startAllSteps.filter { $0.status == "failed" }.count }
-    private var skippedSteps: Int { store.startAllSteps.filter { $0.status == "skipped" }.count }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Button { showDetails = true } label: {
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 7) {
-                        Image(systemName: store.menuGatewayStatus.symbol)
-                            .font(.system(size: 15, weight: .semibold))
-                            .foregroundStyle(store.menuGatewayStatus.color)
-                            .frame(width: 32, height: 32)
-                            .background(store.menuGatewayStatus.color.opacity(0.1), in: RoundedRectangle(cornerRadius: 9))
-                            .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("本地网关").font(.system(size: 11)).foregroundStyle(.secondary)
-                            Text(store.menuGatewayStatus.title).font(.subheadline.weight(.semibold))
-                        }
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right").font(.caption).accessibilityHidden(true)
+                HStack(spacing: 8) {
+                    Image(systemName: store.menuGatewayStatus.symbol)
+                        .foregroundStyle(store.menuGatewayStatus.color).accessibilityHidden(true)
+                    Text("网关 · " + store.menuGatewayStatus.title).font(.system(size: 12, weight: .semibold))
+                    Spacer(minLength: 0)
+                    if summary.failureCount > 0 || failedSteps > 0 {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                            .accessibilityLabel("有异常或上次启动失败，请查看详情")
                     }
-                    Text(summary.activityText).font(.system(size: 12)).foregroundStyle(.secondary).monospacedDigit()
-                    if summary.failureCount > 0 {
-                        Label("\(summary.failureCount) 项异常 · 查看状态", systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: 12, weight: .medium))
-                    } else if failedSteps > 0 {
-                        Label("上次启动 \(failedSteps) 项失败 · 查看结果", systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: 12, weight: .medium))
-                    } else if store.startAllBusy {
-                        Text("正在依次启动 · 查看进度").font(.system(size: 12))
-                    } else if skippedSteps > 0 {
-                        Text("上次启动 \(skippedSteps) 项跳过 · 查看结果").font(.system(size: 12))
-                    } else if !store.startAllSteps.isEmpty {
-                        Text("查看上次启动结果").font(.system(size: 12))
-                    }
+                    Image(systemName: "chevron.right").font(.caption2).accessibilityHidden(true)
                 }
                 .foregroundStyle(.primary)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("查看当前连接状态和上次全部启动的详细结果")
-            ViewThatFits(in: .horizontal) {
-                HStack(spacing: 8) { startAllButton; stopAllButton }
-                VStack(alignment: .leading, spacing: 8) { startAllButton; stopAllButton }
-            }
+            .help(summary.activityText + " · 查看当前状态与上次启动结果")
+            HStack(spacing: 8) { startAllButton; stopAllButton }
             .controlSize(.regular)
             if !store.isGatewayRunning {
                 Button(store.gatewayState == "Disconnected" ? "仅重新连接 / 启动网关" : "仅启动网关") {
@@ -69,13 +44,12 @@ struct SidebarRuntimeControls: View {
             if store.hasUnsavedChanges {
                 Text("先保存修改，再全部启动").font(.system(size: 12)).foregroundStyle(.secondary)
             }
-            Label("仅监听本机 · 工具默认不开放", systemImage: "lock.shield")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            Divider().padding(.vertical, 2)
+            Divider()
             SidebarActivityView(confirm: confirm)
         }
-        .harborSurface()
-        .padding(.horizontal, 12).padding(.bottom, 14)
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .overlay(alignment: .top) { Divider() }
+        .padding(.horizontal, 12).padding(.bottom, 8)
         .sheet(isPresented: $showDetails) {
             RuntimeStatusDetails().environmentObject(store)
                 .disclosureGroupStyle(FullRowDisclosureStyle())
@@ -88,7 +62,8 @@ struct SidebarRuntimeControls: View {
                 store.startAll(expectedPlan: plan, expectedWorkspace: workspace, expectedRevision: revision)
             }
         } label: {
-            TrayActionLabel(title: store.startAllBusy ? "启动中" : "全部启动", symbol: "play.fill", busy: store.startAllBusy, height: 70)
+            Label(store.startAllBusy ? "启动中" : "全部启动", systemImage: store.startAllBusy ? "hourglass" : "play.fill")
+                .font(.system(size: 12, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 32)
         }
         .buttonStyle(TrayActionStyle(tint: .blue))
         .disabled(store.startAllBusy || store.takeoverBusy || store.hasUnsavedChanges)
@@ -99,7 +74,8 @@ struct SidebarRuntimeControls: View {
         Button {
             confirm("停止共享网关及全部连接？所有连接到此实例的 AI 和应用都会受到影响。将取消后续启动并请求停止当前进程；配置会保留。") { store.shutdown() }
         } label: {
-            TrayActionLabel(title: store.menuGatewayStatus == .stopping ? "停止中" : "全部停止", symbol: "stop.fill", busy: store.menuGatewayStatus == .stopping, height: 70)
+            Label(store.menuGatewayStatus == .stopping ? "停止中" : "全部停止", systemImage: store.menuGatewayStatus == .stopping ? "hourglass" : "stop.fill")
+                .font(.system(size: 12, weight: .semibold)).frame(maxWidth: .infinity, minHeight: 32)
         }
         .buttonStyle(TrayActionStyle(tint: .red))
         .disabled(store.menuGatewayStatus == .stopping || (!store.anyProcessRunning && !store.startAllBusy && !store.gatewayStartBusy) || store.takeoverBusy)

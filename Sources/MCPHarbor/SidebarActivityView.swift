@@ -14,11 +14,13 @@ struct SidebarActivityView: View {
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(expanded ? "收起操作动态" : "展开操作动态")
                 .accessibilityValue(expanded ? "已展开" : "已折叠")
+            if expanded {
             if let latest = store.activities.first {
                 Text(latest.summary).font(.system(size: 12)).lineLimit(2)
                 Text(latest.source.rawValue + " · " + latest.outcome.rawValue)
                     .font(.system(size: 11)).foregroundStyle(latest.outcome == .failed ? .red : .secondary)
             } else { Text("暂无操作记录").font(.system(size: 12)).foregroundStyle(.secondary) }
+            }
             if store.hasUnsavedChanges {
                 Label("本地草稿尚未保存", systemImage: "pencil").font(.system(size: 11)).foregroundStyle(.orange)
             }

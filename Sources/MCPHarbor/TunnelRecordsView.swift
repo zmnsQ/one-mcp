@@ -46,7 +46,7 @@ struct TunnelRecordsView: View {
         edit(record, isNew: true)
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("隧道").font(.title2.bold())
@@ -136,7 +136,7 @@ struct TunnelRecordsView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("此入口连接的工具服务").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                 Text(TunnelRecordPresentation.bindingSummary(record, servers: store.preferences.servers))
-                    .font(.callout).lineLimit(2).frame(maxWidth: .infinity, minHeight: 38, alignment: .topLeading)
+                    .font(.callout).lineLimit(2).frame(maxWidth: .infinity, alignment: .topLeading)
                     .help(TunnelRecordPresentation.bindingSummary(record, servers: store.preferences.servers))
                 Label(record.transport == "openai" ? "通过 OpenAI 工作区连接" : "公网访问要求 OAuth 授权", systemImage: record.transport == "openai" ? "building.2" : "lock.shield")
                     .font(.caption).foregroundStyle(.secondary)
@@ -245,7 +245,7 @@ private struct TunnelRecordDetails: View {
             Divider()
             ScrollView {
                 if let record {
-                    VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Label(record.transport == "openai" ? "OpenAI" : "Cloudflare", systemImage: "network").font(.headline)
                             Spacer()
@@ -429,7 +429,7 @@ private struct TunnelRecordEditor: View {
                 .padding(20)
             Divider()
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 14) {
                     configuration.disabled(busy || contextChanged || completed)
                     if busy {
                         HarborNotice(title: "配置暂时锁定", detail: "隧道运行或操作中，停止后可修改配置。", symbol: "lock", tint: .orange)

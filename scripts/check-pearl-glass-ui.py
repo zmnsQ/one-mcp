@@ -14,6 +14,9 @@ class PearlGlass(unittest.TestCase):
         self.assertNotIn('styleMask',s)
         self.assertGreaterEqual(h.count('HarborCanvas()'),4)
         self.assertNotIn('Color(nsColor: .windowBackgroundColor)',h)
+        self.assertIn('.toolbarBackgroundVisibility(.hidden, for: .windowToolbar)',h)
+        self.assertIn('.containerBackground(Color(nsColor: HarborPalette.canvas), for: .window)',h)
+        self.assertEqual(h.count('HarborCanvas().ignoresSafeArea(.container, edges: .top)'),2)
         header=h.split('private var header: some View')[1].split('private func approve')[0]
         self.assertNotIn('.background {',header)
     def test_single_hero_not_four_equal_surface_cards(self):
@@ -23,9 +26,18 @@ class PearlGlass(unittest.TestCase):
         self.assertIn('远端调用需单独验证',s)
         metric=s.split('private func metric(')[1].split('private func onboardingStep')[0]
         self.assertNotIn('.harborSurface()',metric)
+    def test_dense_a_layout_and_real_activity(self):
+        s=read('OverviewDashboard.swift')
+        for token in ['private var dashboardLayout: AnyLayout', 'contentWidth >= 880', '(contentWidth - 12) * 0.66', 'GridItem(.adaptive(minimum: 250)', 'count: 2)', 'store.activities.prefix(3)', 'store.menuTunnelIDs.prefix(3)', '.frame(width: 68, height: 56)', 'expectedPlan: plan, expectedWorkspace: workspace, expectedRevision: revision']:
+            self.assertIn(token,s)
+        self.assertNotIn('TunnelRecordsView()',s)
+        self.assertNotIn('BrandMark().frame(width: 92',s)
+        self.assertIn('var padding: CGFloat = 14',read('HarborDesignSystem.swift'))
     def test_shared_actions_and_semantics(self):
         s=read('SidebarRuntimeControls.swift'); t=read('MenuBarPanel.swift')
-        self.assertIn('TrayActionLabel(',s)
+        self.assertNotIn('TrayActionLabel(',s)
+        self.assertIn('minHeight: 32',s)
+        self.assertNotIn('.harborSurface()',s.split('private struct RuntimeStatusDetails')[0])
         self.assertIn('TrayActionStyle(tint: .red)',s)
         for v in ['accessibilityReduceMotion', 'colorSchemeContrast', 'isFocused', 'busy && !reduceMotion']:
             self.assertIn(v,t)

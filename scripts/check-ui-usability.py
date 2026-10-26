@@ -92,8 +92,8 @@ class UIContractTests(unittest.TestCase):
         self.assertIn('confirm("停止共享网关及全部连接？', sidebar)
         self.assertIn('store.shutdown()', sidebar)
         self.assertIn('store.hasUnsavedChanges', sidebar)
-        self.assertIn('ViewThatFits(in: .horizontal)', sidebar)
-        self.assertIn('VStack(alignment: .leading, spacing: 8) { startAllButton; stopAllButton }', sidebar)
+        self.assertIn('HStack(spacing: 8) { startAllButton; stopAllButton }', sidebar)
+        self.assertIn('minHeight: 32', sidebar)
 
     def test_all_settings_and_safety_guards_remain(self):
         view = read('HarborView.swift')

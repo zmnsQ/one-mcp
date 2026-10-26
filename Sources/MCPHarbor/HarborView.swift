@@ -121,8 +121,10 @@ struct HarborView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.20), value: section)
-            .background { HarborCanvas() }
+            .background { HarborCanvas().ignoresSafeArea(.container, edges: .top) }
         }
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .containerBackground(Color(nsColor: HarborPalette.canvas), for: .window)
         .background { HarborWindowChrome().frame(width: 0, height: 0) }
         .frame(minWidth: 1020, minHeight: 700)
 
@@ -134,7 +136,7 @@ struct HarborView: View {
                 Text("工作空间名称").font(.subheadline.weight(.medium))
                 TextField("名称", text: $workspaceName).textFieldStyle(.roundedBorder)
                 HStack { Button("取消") { showWorkspaceSheet = false }; Spacer(); Button("创建") { if store.createWorkspace(name: workspaceName) { workspaceName = ""; showWorkspaceSheet = false } }.buttonStyle(.glassProminent).disabled(workspaceName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
-            }.padding(24).frame(width: 520).background { HarborCanvas() }
+            }.padding(18).frame(width: 520).background { HarborCanvas() }
         }
         .sheet(isPresented: $store.showImportPreview, onDismiss: { store.cancelImportPreview() }) { ImportPreview().environmentObject(store) }
         .sheet(isPresented: $showConfirmation, onDismiss: { pendingAction = nil }) {
@@ -180,7 +182,7 @@ struct HarborView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 HStack { Spacer(); Button("取消", role: .cancel) { showAddMCP = false } }
-            }.padding(24).frame(width: 560).background { HarborCanvas() }
+            }.padding(18).frame(width: 560).background { HarborCanvas() }
         }
         .onReceive(navigationRouter.$destination) { destination in
             guard let destination, let requested = Section(rawValue: destination) else { return }
@@ -244,13 +246,11 @@ struct HarborView: View {
                         Text("管理").font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).padding(.horizontal, 12).padding(.top, 16).padding(.bottom, 6)
                         HarborNavigationRow(title: Section.settings.title, subtitle: "运行环境 · 安全 · 数据", symbol: Section.settings.icon, selected: section == .settings) { section = .settings }
                     }.padding(.horizontal, 12)
-                }
-                ScrollView {
-                    SidebarRuntimeControls(confirm: { message, action in approve(message, action: action) })
-                }.frame(maxHeight: 300)
+                }.frame(minHeight: 220).layoutPriority(1)
+                SidebarRuntimeControls(confirm: { message, action in approve(message, action: action) })
             }
             .background {
-                HarborCanvas()
+                HarborCanvas().ignoresSafeArea(.container, edges: .top)
             }
             .navigationSplitViewColumnWidth(min: 260, ideal: 280, max: 320)
     }
@@ -265,7 +265,7 @@ struct HarborView: View {
                 .contentTransition(reduceMotion ? .identity : .symbolEffect(.replace))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(section == .dashboard ? "工作台" : section.title).font(.system(size: 28, weight: .bold))
+                Text(section == .dashboard ? "工作台" : section.title).font(.system(size: 25, weight: .bold))
                 Text(section.subtitle).font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -273,7 +273,7 @@ struct HarborView: View {
             if store.hasUnsavedChanges { Label("有未保存修改", systemImage: "circle.fill").font(.caption).foregroundStyle(.orange) }
             if !store.pendingCommands.isEmpty { RuntimeActionLabel(title: "等待确认：\(store.pendingCommands.count)", busy: true).font(.caption).foregroundStyle(.secondary) }
 
-        }.padding(.horizontal, 24).padding(.vertical, 22)
+        }.padding(.horizontal, 18).padding(.vertical, 14)
             .fixedSize(horizontal: false, vertical: true)
 
     }
@@ -294,7 +294,7 @@ struct HarborView: View {
         let server = store.preferences.servers[index]
         let running = ["running", "starting", "stopping"].contains(store.states[server.id] ?? "") || store.hasPendingCommand(for: server.id)
         return ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 14) {
                 VStack(alignment: .leading, spacing: 12) {
                     HarborSheetHeader(title: server.name, subtitle: server.isCLI ? "将命令行能力连接给 AI，按工具控制可用范围。" : "把本机工具连接给 AI，只开放你明确选择的能力。", symbol: server.isCLI ? "terminal.fill" : "shippingbox.fill")
                     HStack {
@@ -354,7 +354,7 @@ struct HarborView: View {
                     approve("停止连接并移除已保存的配置？不会删除 MCP 程序或其文件。") { store.removeServer(server) }
                 }.disabled(running)
                 }
-            }.padding(24)
+            }.padding(18)
         }
     }
     private func serviceNextStep(_ server: ServerConfig) -> String {
@@ -395,7 +395,7 @@ struct HarborView: View {
                     Button("添加 MCP") { showAddMCP = true }.buttonStyle(.glassProminent)
                         .keyboardShortcut("n", modifiers: [.command, .shift])
                         .help("从配置文件导入，或手动添加")
-                }.padding(32).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else {
                 HStack(spacing: 0) {
                     VStack(alignment: .leading, spacing: 8) {
@@ -445,7 +445,7 @@ struct HarborView: View {
     }
     private var tunnelSettings: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: 14) {
                 TunnelRecordsView().environmentObject(store)
                 if !store.gatewayReady {
                     Label("启动网关后即可启动隧道；现在也可以添加或编辑记录。", systemImage: "info.circle")
@@ -475,7 +475,7 @@ struct HarborView: View {
                     SettingsSectionLabel(title: "连接帮助与高级维护", subtitle: "首次安装、共享认证与连接诊断，按需展开。", symbol: "wrench.and.screwdriver")
                 }
                 }
-            }.padding(24)
+            }.padding(18)
         }
     }
     private var connectionSettings: some View {
@@ -489,11 +489,11 @@ struct HarborView: View {
             }.onGeometryChange(for: Bool.self) { geometry in
                 geometry.size.width >= 720
             } action: { settingsWide = $0 }
-            .padding(24)
+            .padding(18)
         }
     }
     private var settingsLayout: AnyLayout {
-        settingsWide ? AnyLayout(HStackLayout(alignment: .top, spacing: 20)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 24))
+        settingsWide ? AnyLayout(HStackLayout(alignment: .top, spacing: 14)) : AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
     }
     private var settingsConnectionColumn: some View {
         VStack(alignment: .leading, spacing: 14) {

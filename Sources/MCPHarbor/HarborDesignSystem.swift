@@ -47,24 +47,25 @@ struct HarborWindowChrome: NSViewRepresentable {
 
 /// Pearl-glass surfaces: blue-tinted depth without repeated dark outlined boxes.
 private struct HarborSurface: ViewModifier {
+    var padding: CGFloat = 14
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var hovered = false
     func body(content: Content) -> some View {
         content
-            .padding(18)
+            .padding(padding)
             .background {
-                RoundedRectangle(cornerRadius: 22)
+                RoundedRectangle(cornerRadius: 18)
                     .fill(scheme == .dark ? Color.white.opacity(0.065) : Color.white.opacity(0.82))
                     .overlay {
-                        RoundedRectangle(cornerRadius: 22)
+                        RoundedRectangle(cornerRadius: 18)
                             .fill(LinearGradient(colors: [Color.blue.opacity(hovered ? 0.07 : 0.025), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
                             .allowsHitTesting(false)
                     }
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 22)
+                RoundedRectangle(cornerRadius: 18)
                     .strokeBorder(contrast == .increased ? Color.primary : Color.white.opacity(scheme == .dark ? 0.11 : 0.92), lineWidth: contrast == .increased ? 2 : 1)
                     .allowsHitTesting(false)
             }
@@ -75,7 +76,7 @@ private struct HarborSurface: ViewModifier {
 }
 
 extension View {
-    func harborSurface() -> some View { modifier(HarborSurface()) }
+    func harborSurface(padding: CGFloat = 14) -> some View { modifier(HarborSurface(padding: padding)) }
 }
 
 /// A small tactile response for the single primary action, never an ambient loop.

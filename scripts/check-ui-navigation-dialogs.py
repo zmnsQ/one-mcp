@@ -30,7 +30,7 @@ class PresentationArchitecture(unittest.TestCase):
         self.assertIn('settingsConnectionColumn.frame(maxWidth: .infinity',s)
         self.assertIn('settingsSafetyColumn.frame(maxWidth: .infinity',s)
         self.assertIn('private var settingsLayout: AnyLayout',s)
-        self.assertIn('.frame(maxHeight: 300)',s)
+        self.assertNotIn('.frame(maxHeight: 300)',s)
         self.assertIn('当前打开的服务不在筛选结果中',s)
         for t in ['runtimeSettingsCard','advancedSettingsCard','diagnosticSettingsCard','aiManagementSettingsCard','credentialSettingsCard','backupSettingsCard']:
             self.assertGreaterEqual(s.count(t),2)
